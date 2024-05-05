@@ -7,16 +7,13 @@
 #include "server.hpp"
 
 Server::Server(unsigned port) :
-    port_(port),
-    connection_("dbname=sbtest user=sbtest password=12345 hostaddr=127.0.0.1 port=5432")
+    port_(port)
 {
-    if (!connection_.is_open()) {
-        throw std::runtime_error("Connection error!");
-    }
-
     s_addr_.sin_family = AF_INET;
     s_addr_.sin_addr.s_addr = INADDR_ANY;
     s_addr_.sin_port = htons(port_);
+
+    pgsql_socket = ConnectToPGSQL();
 }
 
 Server::~Server() {
@@ -80,7 +77,7 @@ void Server::SaveLogs(const std::string& request) {
     log_file << request << '\n';
 }
 
-void Server::HandleClientEvent(epoll_event& event) {
+void Server::DisableSSL(epoll_event& event) {
     char buffer[max_buffer_size_];
     ssize_t bytes_read{recv(event.data.fd, buffer, max_buffer_size_, 0)};
 
@@ -88,31 +85,85 @@ void Server::HandleClientEvent(epoll_event& event) {
         epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, event.data.fd, NULL);
         close(event.data.fd);
     } else {
-        std::string request(buffer, bytes_read);
-
-        SaveLogs(request);
-
-        // request = "SELECT COUNT(*) FROM sbtest1;";
-
-        pqxx::work txn(connection_);
-        pqxx::result result{txn.exec(request)};
-
-        txn.commit();
-
-        // for (auto const &row: result) {
-        //     for (auto const &field: row)
-        //         std::cout << field.c_str() << '\t';
-
-        //     std::cout << '\n';
-        // }
+        if (send(event.data.fd, "N", 1, 0) < 0) {
+            throw std::runtime_error("Error: send()");
+        }
     }
 }
 
-void Server::DisableSSL(epoll_event& event) {
-    char ssl_off{'N'};
+int Server::ConnectToPGSQL() {
+    int pgsql_socket{socket(AF_INET, SOCK_STREAM, 0)};
+
+    struct sockaddr_in server_addr;
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(5432);
+
+    if (inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr) <= 0) {
+        close(pgsql_socket);
+        throw std::runtime_error("Error connecting to postgresql srver!");
+    }
+
+    auto casted_addr{reinterpret_cast<struct sockaddr*>(&server_addr)};
+
+    if (connect(pgsql_socket, casted_addr, sizeof(server_addr))) {
+        close(pgsql_socket);
+        throw std::runtime_error("Error connecting to postgresql srver!");
+    }
+
+    return pgsql_socket;
+}
+
+bool IsSSLRequest(char* buffer) {
+    static constexpr int ssl_request_code{0x04d2162f};
+
+    char tmp_buffer[8]{
+        buffer[0], buffer[1], buffer[2], buffer[3],
+        buffer[4], buffer[5], buffer[6], buffer[7],
+    };
+
+    uint32_t msg_len{ntohl(*reinterpret_cast<int*>(tmp_buffer))};
+    uint32_t ssl_code{ntohl(*reinterpret_cast<int*>(tmp_buffer + 4))};
+
+    if (msg_len == 8 && ssl_code == ssl_request_code) {
+        return true;
+    }
+
+    return false;
+}
+
+void Server::HandleClientEvent(epoll_event& event) {
+    // DisableSSL(event);
+
     char buffer[max_buffer_size_];
-    recv(event.data.fd, buffer, max_buffer_size_, 0);
-    send(event.data.fd, &ssl_off, 1, 0);
+    ssize_t bytes_read{recv(event.data.fd, buffer, max_buffer_size_, 0)};
+
+    // if (IsSSLRequest(buffer)) {
+        // close(pgsql_socket);
+        // pgsql_socket = ConnectToPGSQL();
+    // }
+
+    if (bytes_read <= 0) {
+        epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, event.data.fd, NULL);
+        close(event.data.fd);
+    } else {
+        SaveLogs(std::string(buffer, bytes_read));
+
+        if (send(pgsql_socket, buffer, bytes_read, 0) < 0) {
+            throw std::runtime_error("Error: send()");
+        }
+
+        bytes_read = recv(pgsql_socket, buffer, max_buffer_size_, 0);
+
+        if (bytes_read <= 0) {
+            epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, event.data.fd, NULL);
+            close(event.data.fd);
+        } else {
+            if (send(event.data.fd, buffer, bytes_read, 0) < 0) {
+                throw std::runtime_error("Error: send()");
+            }
+        }
+    }
 }
 
 void Server::EventLoop() {
@@ -125,11 +176,6 @@ void Server::EventLoop() {
             if (events[i].data.fd == s_socket_) {
                 AcceptNewConnection(events[i]);
             } else {
-                /*
-                    Расчитано на то, что каждый запрос сперва является SSLRequest,
-                    если первым запросом будет не SSLRequest, то отработает некорректно
-                */
-                DisableSSL(events[i]);
                 HandleClientEvent(events[i]);
             }
         }

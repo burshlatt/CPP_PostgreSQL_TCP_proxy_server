@@ -58,7 +58,7 @@ GRANT ALL PRIVILEGES ON DATABASE sbtest TO sbtest;
 ```
 After creating the database, run the command to fill the table with data:
 ```bash
-make setup_bd
+make prepare_db
 ```
 
 ## Running
@@ -73,7 +73,7 @@ After successful compilation, the server can be started by executing the followi
 
 Run this command to run tests through sysbench:
 ```bash
-make test
+make test_server
 ```
 
 ## Usage

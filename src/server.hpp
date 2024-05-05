@@ -2,7 +2,6 @@
 #define TCP_PROXY_SERVER_SERVER_HPP
 
 #include <string>
-#include <pqxx/pqxx>
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 
@@ -22,17 +21,18 @@ private:
     void SaveLogs(const std::string& request);
     void HandleClientEvent(epoll_event& event);
     void AcceptNewConnection(epoll_event& event);
-    void SendRequest(const std::string& request);
 
+    int ConnectToPGSQL();
+    
 private:
     unsigned port_;
 
     int s_socket_{};
     int epoll_fd_{};
 
+    int pgsql_socket{};
+    
     struct sockaddr_in s_addr_;
-
-    pqxx::connection connection_;
 
     static constexpr unsigned max_events_{512};
     static constexpr unsigned max_buffer_size_{4096};
