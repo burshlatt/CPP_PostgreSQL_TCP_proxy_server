@@ -8,7 +8,7 @@ USER="sbtest"
 PASS="12345"
 TEST_FILE="/usr/share/sysbench/oltp_read_write.lua"
 
-TIME_SEC="30"
+TIME_SEC="300"
 NUM_THREADS="1"
 EVENTS="1000000"
 TABLE_SIZE="100000"

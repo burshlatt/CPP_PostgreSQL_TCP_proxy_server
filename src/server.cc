@@ -12,13 +12,34 @@ Server::Server(unsigned port) :
     s_addr_.sin_family = AF_INET;
     s_addr_.sin_addr.s_addr = INADDR_ANY;
     s_addr_.sin_port = htons(port_);
-
-    pgsql_socket = ConnectToPGSQL();
 }
 
 Server::~Server() {
     close(s_socket_);
     close(epoll_fd_);
+}
+
+int Server::ConnectToPGSQL() {
+    int pgsql_socket{socket(AF_INET, SOCK_STREAM, 0)};
+
+    struct sockaddr_in server_addr;
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(5432);
+
+    if (inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr) <= 0) {
+        close(pgsql_socket);
+        throw std::runtime_error("Error connecting to postgresql srver!");
+    }
+
+    auto casted_addr{reinterpret_cast<struct sockaddr*>(&server_addr)};
+
+    if (connect(pgsql_socket, casted_addr, sizeof(server_addr))) {
+        close(pgsql_socket);
+        throw std::runtime_error("Error connecting to postgresql srver!");
+    }
+
+    return pgsql_socket;
 }
 
 void Server::SetupSocket() {
@@ -52,69 +73,7 @@ void Server::SetupEpoll() {
     }
 }
 
-void Server::AcceptNewConnection(epoll_event& event) {
-    struct sockaddr_in c_addr;
-    socklen_t c_addr_len{sizeof(c_addr)};
-    auto casted_c_addr{reinterpret_cast<struct sockaddr*>(&c_addr)};
-    int c_socket{accept(s_socket_, casted_c_addr, &c_addr_len)};
-
-    if (c_socket == -1) {
-        std::cerr << "Error: Failed to accept connection\n";
-    } else {
-        event.events = EPOLLIN | EPOLLET;
-        event.data.fd = c_socket;
-
-        if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, c_socket, &event) == -1) {
-            std::cerr << "Error: Failed to add client socket to epoll\n";
-            close(c_socket);
-        }
-    }
-}
-
-void Server::SaveLogs(const std::string& request) {
-    std::ofstream log_file("requests.log", std::ios::app);
-
-    log_file << request << '\n';
-}
-
-void Server::DisableSSL(epoll_event& event) {
-    char buffer[max_buffer_size_];
-    ssize_t bytes_read{recv(event.data.fd, buffer, max_buffer_size_, 0)};
-
-    if (bytes_read <= 0) {
-        epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, event.data.fd, NULL);
-        close(event.data.fd);
-    } else {
-        if (send(event.data.fd, "N", 1, 0) < 0) {
-            throw std::runtime_error("Error: send()");
-        }
-    }
-}
-
-int Server::ConnectToPGSQL() {
-    int pgsql_socket{socket(AF_INET, SOCK_STREAM, 0)};
-
-    struct sockaddr_in server_addr;
-
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(5432);
-
-    if (inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr) <= 0) {
-        close(pgsql_socket);
-        throw std::runtime_error("Error connecting to postgresql srver!");
-    }
-
-    auto casted_addr{reinterpret_cast<struct sockaddr*>(&server_addr)};
-
-    if (connect(pgsql_socket, casted_addr, sizeof(server_addr))) {
-        close(pgsql_socket);
-        throw std::runtime_error("Error connecting to postgresql srver!");
-    }
-
-    return pgsql_socket;
-}
-
-bool IsSSLRequest(char* buffer) {
+bool Server::IsSSLRequest(char* buffer) {
     static constexpr int ssl_request_code{0x04d2162f};
 
     char tmp_buffer[8]{
@@ -132,32 +91,108 @@ bool IsSSLRequest(char* buffer) {
     return false;
 }
 
-void Server::HandleClientEvent(epoll_event& event) {
-    // DisableSSL(event);
-
+void Server::DisableSSL(epoll_event& event) {
     char buffer[max_buffer_size_];
     ssize_t bytes_read{recv(event.data.fd, buffer, max_buffer_size_, 0)};
 
-    // if (IsSSLRequest(buffer)) {
-        // close(pgsql_socket);
-        // pgsql_socket = ConnectToPGSQL();
-    // }
+    if (bytes_read > 0 && IsSSLRequest(buffer)) {
+        if (send(event.data.fd, "N", 1, 0) < 0) {
+            throw std::runtime_error("Error: send()");
+        }
+    }
+}
+
+bool Server::AcceptNewConnection(epoll_event& event) {
+    struct sockaddr_in c_addr;
+    socklen_t c_addr_len{sizeof(c_addr)};
+    auto casted_c_addr{reinterpret_cast<struct sockaddr*>(&c_addr)};
+    int c_socket{accept(s_socket_, casted_c_addr, &c_addr_len)};
+
+    if (c_socket == -1) {
+        std::cerr << "Error: Failed to accept connection\n";
+    } else {
+        event.events = EPOLLIN | EPOLLET;
+        event.data.fd = c_socket;
+
+        if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, c_socket, &event) == -1) {
+            std::cerr << "Error: Failed to add client socket to epoll\n";
+            close(c_socket);
+            return false;
+        }
+
+        DisableSSL(event);
+    }
+
+    return true;
+}
+
+bool IsSQLRequest(std::string_view request) {
+    if (request[0] != 'P') {
+        return false;
+    }
+
+    static const std::vector<std::string> tokens{
+        "BEGIN", "COMMIT", "INSERT",
+        "SELECT", "UPDATE", "DELETE"
+    };
+
+    for (const auto& token : tokens) {
+        if (request.find(token) != std::string::npos) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::string GetSQLRequest(std::string_view request) {
+    static const std::vector<std::string> tokens{
+        "BEGIN", "COMMIT", "INSERT",
+        "SELECT", "UPDATE", "DELETE"
+    };
+
+    for (const auto& token : tokens) {
+        if (auto pos{request.find(token)}; pos != std::string::npos) {
+            request.remove_prefix(pos);
+        }
+    }
+
+    return std::string(request);
+}
+
+void Server::SaveLogs(std::string_view request) {
+    if (!IsSQLRequest(request)) {
+        return;
+    }
+
+    std::string sql_req{std::move(GetSQLRequest(request))};
+
+    std::ofstream log_file("requests.log", std::ios::app);
+
+    log_file << sql_req << '\n';
+}
+
+void Server::HandleClientEvent(epoll_event& event) {
+    char buffer[max_buffer_size_];
+    ssize_t bytes_read{recv(event.data.fd, buffer, max_buffer_size_, 0)};
 
     if (bytes_read <= 0) {
         epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, event.data.fd, NULL);
         close(event.data.fd);
+        close(pgsql_socks_[event.data.fd]);
     } else {
         SaveLogs(std::string(buffer, bytes_read));
 
-        if (send(pgsql_socket, buffer, bytes_read, 0) < 0) {
+        if (send(pgsql_socks_[event.data.fd], buffer, bytes_read, 0) < 0) {
             throw std::runtime_error("Error: send()");
         }
 
-        bytes_read = recv(pgsql_socket, buffer, max_buffer_size_, 0);
+        bytes_read = recv(pgsql_socks_[event.data.fd], buffer, max_buffer_size_, 0);
 
         if (bytes_read <= 0) {
             epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, event.data.fd, NULL);
             close(event.data.fd);
+            close(pgsql_socks_[event.data.fd]);
         } else {
             if (send(event.data.fd, buffer, bytes_read, 0) < 0) {
                 throw std::runtime_error("Error: send()");
@@ -174,11 +209,17 @@ void Server::EventLoop() {
 
         for (int i{}; i < num_events; ++i) {
             if (events[i].data.fd == s_socket_) {
-                AcceptNewConnection(events[i]);
+                if (AcceptNewConnection(events[i])) {
+                    pgsql_socks_[events[i].data.fd] = ConnectToPGSQL();
+                }
             } else {
                 HandleClientEvent(events[i]);
             }
         }
+    }
+
+    for (auto& event : events) {
+        close(pgsql_socks_[event.data.fd]);
     }
 }
 
