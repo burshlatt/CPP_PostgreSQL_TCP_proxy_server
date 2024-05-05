@@ -26,7 +26,12 @@ private:
     int ConnectToPGSQL();
 
     bool IsSSLRequest(char* buffer);
+    bool IsSQLRequest(std::string_view request);
     bool AcceptNewConnection(epoll_event& event);
+
+    std::string GetSQLRequest(std::string_view request);
+
+    ssize_t SendAll(int fd, const char* buf, size_t len);
     
 private:
     unsigned port_;
@@ -39,7 +44,7 @@ private:
     std::unordered_map<int, int> pgsql_socks_;
 
     static constexpr unsigned max_events_{512};
-    static constexpr unsigned max_buffer_size_{4096};
+    static constexpr unsigned max_buffer_size_{32768};
 };
 
 #endif // TCP_PROXY_SERVER_SERVER_HPP

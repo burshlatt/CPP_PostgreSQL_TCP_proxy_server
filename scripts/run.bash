@@ -6,11 +6,10 @@ HOST="127.0.0.1"
 DB="sbtest"
 USER="sbtest"
 PASS="12345"
-TEST_FILE="/usr/share/sysbench/oltp_read_write.lua"
+TEST_FILE="/usr/share/sysbench/oltp_write_only.lua"
 
-TIME_SEC="300"
+TIME_SEC="10"
 NUM_THREADS="1"
-EVENTS="1000000"
 TABLE_SIZE="100000"
 
 sysbench \
@@ -21,7 +20,6 @@ sysbench \
     --pgsql-db=$DB \
 	--pgsql-user=$USER \
 	--pgsql-password=$PASS \
-    --events=$EVENTS \
     --time=$TIME_SEC \
     --threads=$NUM_THREADS \
     --table-size=$TABLE_SIZE \
