@@ -4,7 +4,7 @@ This project is a simple TCP proxy server capable of accepting incoming TCP conn
 
 ## Requirements
 
-- C++ compiler with C++11 support
+- C++ compiler with C++17 support
 - libpqxx library for working with PostgreSQL
 - epoll library for handling multiplexing in Linux
 
