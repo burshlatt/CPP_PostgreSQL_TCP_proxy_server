@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <cstring>
 #include <fstream>
 #include <unistd.h>
 #include <algorithm>
@@ -9,7 +10,7 @@
 
 Server::Server(unsigned port) :
     port_(port),
-    log_file_("requests.log", std::ios::app);
+    log_file_("requests.log", std::ios::app)
 {
     s_addr_.sin_family = AF_INET;
     s_addr_.sin_addr.s_addr = INADDR_ANY;
