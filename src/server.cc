@@ -1,7 +1,6 @@
 #include <iostream>
 #include <vector>
 #include <cstring>
-#include <fstream>
 #include <unistd.h>
 #include <algorithm>
 #include <sys/socket.h>
@@ -9,12 +8,13 @@
 #include "server.hpp"
 
 Server::Server(unsigned port) :
-    port_(port),
-    log_file_("requests.log", std::ios::app)
+    port_(port)
 {
     s_addr_.sin_family = AF_INET;
     s_addr_.sin_addr.s_addr = INADDR_ANY;
     s_addr_.sin_port = htons(port_);
+
+    log_file_.open("requests.log", std::ios::app);
 }
 
 Server::~Server() {
