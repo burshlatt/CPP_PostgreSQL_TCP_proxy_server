@@ -1,6 +1,7 @@
 #ifndef TCP_PROXY_SERVER_SERVER_HPP
 #define TCP_PROXY_SERVER_SERVER_HPP
 
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <arpa/inet.h>
@@ -44,6 +45,8 @@ private:
     struct sockaddr_in s_addr_;
 
     std::unordered_map<int, int> pgsql_sockets_;
+
+    std::mutex mutex_;
 
     static constexpr unsigned max_events_{512};
     static constexpr unsigned max_buffer_size_{32768};
