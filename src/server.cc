@@ -8,7 +8,8 @@
 #include "server.hpp"
 
 Server::Server(unsigned port) :
-    port_(port)
+    port_(port),
+    log_file_("requests.log", std::ios::app);
 {
     s_addr_.sin_family = AF_INET;
     s_addr_.sin_addr.s_addr = INADDR_ANY;
@@ -141,9 +142,7 @@ void Server::SaveLogs(std::string_view request) {
 
     std::string sql_req{std::move(GetSQLRequest(request))};
 
-    std::ofstream log_file("requests.log", std::ios::app);
-
-    log_file << sql_req << '\n';
+    log_file_ << sql_req << '\n';
 }
 
 ssize_t Server::SendAll(int fd, const char* buf, size_t len) {
