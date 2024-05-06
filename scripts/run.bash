@@ -1,16 +1,23 @@
 #!/bin/bash
 
 DRIVER="pgsql"
-PORT="4568"
+PORT="5656"
 HOST="127.0.0.1"
 DB="sbtest"
 USER="sbtest"
 PASS="12345"
-TEST_FILE="/usr/share/sysbench/oltp_write_only.lua"
 
-TIME_SEC="10"
-NUM_THREADS="1"
-TABLE_SIZE="100000"
+TEST_FILE="/usr/share/sysbench/oltp_insert.lua"
+# TEST_FILE="/usr/share/sysbench/oltp_delete.lua"
+# TEST_FILE="/usr/share/sysbench/oltp_point_select.lua"
+# TEST_FILE="/usr/share/sysbench/oltp_update_index.lua"
+# TEST_FILE="/usr/share/sysbench/select_random_ranges.lua"
+# TEST_FILE="/usr/share/sysbench/oltp_update_non_index.lua"
+
+TIME_SEC="300"
+NUM_THREADS="90"
+NUM_TABLE="10"
+TABLE_SIZE="10000"
 
 sysbench \
     $TEST_FILE \
@@ -22,5 +29,6 @@ sysbench \
 	--pgsql-password=$PASS \
     --time=$TIME_SEC \
     --threads=$NUM_THREADS \
+    --tables=$NUM_TABLE \
     --table-size=$TABLE_SIZE \
     run

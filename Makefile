@@ -1,11 +1,16 @@
 CXX = g++
 FLAGS = -Wall -Werror -Wextra
 
-install: clean
-	$(CXX) $(FLAGS) src/main.cc src/server.cc -o server -lpqxx -lpq
+.PHONY: install run uninstall prepare_db test clean_log clean
+
+install: uninstall
+	$(CXX) $(FLAGS) src/*.cc -o server
 
 run:
-	./server 4568
+	./server 5656
+
+uninstall:
+	rm -rf server
 
 prepare_db:
 	sh scripts/prepare.bash
@@ -13,5 +18,7 @@ prepare_db:
 test:
 	sh scripts/run.bash
 
-clean:
-	rm -rf server client requests.log
+clean_log:
+	rm -rf requests.log
+
+clean: clean_log uninstall

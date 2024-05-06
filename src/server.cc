@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <fcntl.h>
 #include <cstring>
 #include <unistd.h>
 #include <algorithm>
@@ -26,8 +27,13 @@ Server::~Server() {
     }
 }
 
-int Server::ConnectToPGSQL() {
+int Server::ConnectToPGSQL() const {
     int pgsql_socket{socket(AF_INET, SOCK_STREAM, 0)};
+
+    if (s_socket_ == -1) {
+        close(pgsql_socket);
+        throw std::runtime_error("Error creating socket: " + std::to_string(errno));
+    }
 
     struct sockaddr_in server_addr;
 
@@ -36,14 +42,14 @@ int Server::ConnectToPGSQL() {
 
     if (inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr) <= 0) {
         close(pgsql_socket);
-        throw std::runtime_error("Error connecting to postgresql srver!");
+        throw std::runtime_error("Error converting IP address: " + std::to_string(errno));
     }
 
     auto casted_addr{reinterpret_cast<struct sockaddr*>(&server_addr)};
 
     if (connect(pgsql_socket, casted_addr, sizeof(server_addr))) {
         close(pgsql_socket);
-        throw std::runtime_error("Error connecting to postgresql srver!");
+        throw std::runtime_error("Error connecting to postgresql server: " + std::to_string(errno));
     }
 
     return pgsql_socket;
@@ -53,13 +59,13 @@ void Server::SetupSocket() {
     s_socket_ = socket(AF_INET, SOCK_STREAM, 0);
 
     if (s_socket_ == -1) {
-        throw std::runtime_error("Error: socket()");
+        throw std::runtime_error("Error creating socket: " + std::to_string(errno));
     }
 
     int opt{1};
 
     if (setsockopt(s_socket_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
-        throw std::runtime_error("Error: setsockopt()");
+        throw std::runtime_error("Error setting socket options: " + std::to_string(errno));
     }
 }
 
@@ -67,7 +73,7 @@ void Server::SetupEpoll() {
     epoll_fd_ = epoll_create1(0);
     
     if (epoll_fd_ == -1) {
-        throw std::runtime_error("Error: epoll_create1()");
+        throw std::runtime_error("Error creating epoll instance: " + std::to_string(errno));
     }
 
     struct epoll_event event;
@@ -76,24 +82,39 @@ void Server::SetupEpoll() {
     event.data.fd = s_socket_;
 
     if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, s_socket_, &event) == -1) {
-        throw std::runtime_error("Error: epoll_ctl()");
+        throw std::runtime_error("Error adding socket to epoll: " + std::to_string(errno));
     }
 }
 
-bool Server::AcceptNewConnection(epoll_event& event) {
+void Server::SetNonBlocking(int sockfd) const {
+    int flags{fcntl(sockfd, F_GETFL, 0)};
+
+    if (flags == -1) {
+        throw std::runtime_error("Error getting socket flags: " + std::to_string(errno));
+    }
+
+    if (fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) == -1) {
+        throw std::runtime_error("Error setting socket flags: " + std::to_string(errno));
+    }
+}
+
+bool Server::AcceptNewConnection(epoll_event& event) const {
     struct sockaddr_in c_addr;
     socklen_t c_addr_len{sizeof(c_addr)};
     auto casted_c_addr{reinterpret_cast<struct sockaddr*>(&c_addr)};
     int c_socket{accept(s_socket_, casted_c_addr, &c_addr_len)};
 
     if (c_socket == -1) {
-        std::cerr << "Error: Failed to accept connection\n";
+        std::cerr << "Error accepting connection: " << strerror(errno) << "\n";
+        return false;
     } else {
+        SetNonBlocking(c_socket);
+
         event.events = EPOLLIN | EPOLLET;
         event.data.fd = c_socket;
 
         if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, c_socket, &event) == -1) {
-            std::cerr << "Error: Failed to add client socket to epoll\n";
+            std::cerr << "Error adding client socket to epoll: " << strerror(errno) << "\n";
             close(c_socket);
             return false;
         }
@@ -102,7 +123,7 @@ bool Server::AcceptNewConnection(epoll_event& event) {
     return true;
 }
 
-bool Server::IsSQLRequest(std::string_view request) {
+bool Server::IsSQLRequest(std::string_view request) const {
     static const std::vector<std::string> tokens{
         "BEGIN", "COMMIT", "INSERT",
         "SELECT", "UPDATE", "DELETE"
@@ -117,13 +138,13 @@ bool Server::IsSQLRequest(std::string_view request) {
     return false;
 }
 
-std::string Server::GetSQLRequest(std::string_view request) {
+std::string Server::GetSQLRequest(std::string_view request) const {
     static const std::vector<std::string> tokens{
         "BEGIN", "COMMIT", "INSERT",
         "SELECT", "UPDATE", "DELETE"
     };
 
-    std::vector<int> positions(tokens.size());
+    std::vector<int> positions;
 
     for (const auto& token : tokens) {
         if (auto pos{request.find(token)}; pos != std::string::npos) {
@@ -131,9 +152,9 @@ std::string Server::GetSQLRequest(std::string_view request) {
         }
     }
 
-    request.remove_prefix(*std::min_element(positions.begin(), positions.end()));
+    request.remove_prefix(*std::min(positions.begin(), positions.end()));
 
-    return std::string(request).substr(0, request.find('\0'));
+    return std::string(request.substr(0, request.find('\0')));
 }
 
 void Server::SaveLogs(std::string_view request) {
@@ -143,26 +164,7 @@ void Server::SaveLogs(std::string_view request) {
 
     std::string sql_req(std::move(GetSQLRequest(request)));
 
-    std::lock_guard<std::mutex> lock(mutex_);
-
     log_file_ << sql_req << '\n';
-}
-
-ssize_t Server::SendAll(int fd, const char* buf, size_t len) {
-    size_t total{};
-    ssize_t bytes{};
-
-    while (total < len) {
-        bytes = send(fd, buf + total, len - total, 0);
-
-        if (bytes == -1) {
-            break;
-        }
-
-        total += bytes;
-    }
-
-    return (bytes == -1 ? -1 : total);
 }
 
 void Server::HandleClientEvent(epoll_event& event) {
@@ -177,8 +179,8 @@ void Server::HandleClientEvent(epoll_event& event) {
     } else {
         SaveLogs(std::string(buffer, bytes_read));
 
-        if (SendAll(pgsql_sockets_[event.data.fd], buffer, bytes_read) < 0) {
-            throw std::runtime_error("Error: send()");
+        if (send(pgsql_sockets_[event.data.fd], buffer, bytes_read, 0) < 0) {
+            throw std::runtime_error("Error sending query to PostgreSQL server: " + std::to_string(errno));
         }
 
         memset(buffer, 0, sizeof(buffer));
@@ -191,16 +193,14 @@ void Server::HandleClientEvent(epoll_event& event) {
             close(pgsql_sockets_[event.data.fd]);
             pgsql_sockets_.erase(event.data.fd);
         } else {           
-            SaveLogs(std::string(buffer, bytes_read));
-
-            if (SendAll(event.data.fd, buffer, bytes_read) < 0) {
-                throw std::runtime_error("Error: send()");
+            if (send(event.data.fd, buffer, bytes_read, 0) < 0) {
+                throw std::runtime_error("Error sending a response to a client: " + std::to_string(errno));
             }
         }
     }
 }
 
-bool Server::IsSSLRequest(char* buffer) {
+bool Server::IsSSLRequest(char* buffer) const {
     static constexpr int ssl_request_code{0x04d2162f};
 
     char tmp_buffer[8]{
@@ -218,18 +218,20 @@ bool Server::IsSSLRequest(char* buffer) {
     return false;
 }
 
-void Server::DisableSSL(epoll_event& event) {
+void Server::DisableSSL(epoll_event& event) const {
     char buffer[max_buffer_size_];
     ssize_t bytes_read{recv(event.data.fd, buffer, max_buffer_size_, 0)};
 
     if (bytes_read > 0 && IsSSLRequest(buffer)) {
         if (send(event.data.fd, "N", 1, 0) < 0) {
-            throw std::runtime_error("Error: send()");
+            throw std::runtime_error("SSL disabling error: " + std::to_string(errno));
         }
     }
 }
 
 void Server::EventLoop() {
+    std::cout << "Waiting...\n";
+
     std::vector<struct epoll_event> events(max_events_);
 
     while (true) {
@@ -240,11 +242,15 @@ void Server::EventLoop() {
                 if (AcceptNewConnection(events[i])) {
                     DisableSSL(events[i]);
                     pgsql_sockets_[events[i].data.fd] = ConnectToPGSQL();
+                    std::cout << "Accepted the new connection.\n";
                 }
             } else {
                 HandleClientEvent(events[i]);
             }
         }
+
+        events.clear();
+        events.reserve(max_events_);
     }
 }
 
@@ -254,11 +260,11 @@ void Server::Start() {
     auto casted_s_addr{reinterpret_cast<struct sockaddr*>(&s_addr_)};
 
     if (bind(s_socket_, casted_s_addr, sizeof(s_addr_)) == -1) {
-        throw std::runtime_error("Error: bind()");
+        throw std::runtime_error("Socket binding error!");
     }
 
     if (listen(s_socket_, SOMAXCONN) == -1) {
-        throw std::runtime_error("Error: listen()");
+        throw std::runtime_error("Socket listening Error!");
     }
 
     SetupEpoll();

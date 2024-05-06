@@ -1,7 +1,6 @@
 #ifndef TCP_PROXY_SERVER_SERVER_HPP
 #define TCP_PROXY_SERVER_SERVER_HPP
 
-#include <mutex>
 #include <string>
 #include <fstream>
 #include <string_view>
@@ -21,20 +20,19 @@ private:
     void EventLoop();
     void SetupEpoll();
     void SetupSocket();
-    void DisableSSL(epoll_event& event);
+    void SetNonBlocking(int sockfd) const;
     void SaveLogs(std::string_view request);
+    void DisableSSL(epoll_event& event) const;
     void HandleClientEvent(epoll_event& event);
 
-    int ConnectToPGSQL();
+    int ConnectToPGSQL() const;
 
-    bool IsSSLRequest(char* buffer);
-    bool IsSQLRequest(std::string_view request);
-    bool AcceptNewConnection(epoll_event& event);
+    bool IsSSLRequest(char* buffer) const;
+    bool IsSQLRequest(std::string_view request) const;
+    bool AcceptNewConnection(epoll_event& event) const;
 
-    std::string GetSQLRequest(std::string_view request);
-
-    ssize_t SendAll(int fd, const char* buf, size_t len);
-    
+    std::string GetSQLRequest(std::string_view request) const;
+        
 private:
     unsigned port_;
 
@@ -45,12 +43,10 @@ private:
 
     std::unordered_map<int, int> pgsql_sockets_;
 
-    std::mutex mutex_;
-
     std::ofstream log_file_;
 
-    static constexpr unsigned max_events_{512};
-    static constexpr unsigned max_buffer_size_{32768};
+    static constexpr unsigned max_events_{1024};
+    static constexpr unsigned max_buffer_size_{983040};
 };
 
 #endif // TCP_PROXY_SERVER_SERVER_HPP

@@ -5,29 +5,42 @@ This project is a simple TCP proxy server capable of accepting incoming TCP conn
 ## Requirements
 
 - C++ compiler with C++17 support
-- libpqxx library for working with PostgreSQL
+- Berkeley sockets for working with PostgreSQL
 - epoll library for handling multiplexing in Linux
 
 ## Installation and Build
 
-1. Install the required libraries and compiler if not already installed:
-
-    ```bash
-    sudo apt-get update
-    sudo apt-get install build-essential libpqxx-dev
-    ```
-
-2. Clone the repository:
+1. Clone the repository:
 
     ```bash
     git clone https://github.com/burshlatt/TCP_proxy_server.git
     ```
 
-3. Navigate to the project directory and build the server:
+2. Navigate to the project directory and build the server:
 
     ```bash
-    cd TCP_proxy_server
+    cd PostgreSQL_TCP_proxy_server
     make install
+    ```
+
+## Uninstallation
+
+1. To uninstall the program:
+
+    ```bash
+    make uninstall
+    ```
+
+2. To delete the log files:
+
+    ```bash
+    make clean_log
+    ```
+
+3. To clean up the project:
+
+    ```bash
+    make clean
     ```
 
 ## Installing sysbench
@@ -45,12 +58,11 @@ sysbench 1.0.20
 
 ## Database preparation
 
-Create a new database "sbtest" and new user "sbtest":
-
+Log into psql as the user "postgres":
 ```bash
 psql -h 127.0.0.1 -U postgres
 ```
-After connecting to psql:
+Create a new database "sbtest" and new user "sbtest":
 ```bash
 CREATE USER sbtest WITH PASSWORD '12345';
 CREATE DATABASE sbtest;
@@ -67,13 +79,14 @@ After successful compilation, the server can be started by executing the followi
 
 ```bash
 ./server <port>
+Example: ./server 5656
 ```
 
 ## Running tests
 
 Run this command to run tests through sysbench:
 ```bash
-make test_server
+make test
 ```
 
 ## Usage
