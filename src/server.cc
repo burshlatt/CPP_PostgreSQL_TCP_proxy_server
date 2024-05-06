@@ -142,6 +142,8 @@ void Server::SaveLogs(std::string_view request) {
 
     std::string sql_req(std::move(GetSQLRequest(request)));
 
+    std::lock_guard<std::mutex> lock(mutex_);
+
     log_file_ << sql_req << '\n';
 }
 
