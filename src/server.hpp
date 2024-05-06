@@ -36,6 +36,8 @@ private:
 private:
     unsigned port_;
 
+    std::ofstream log_file_;
+
     int s_socket_{};
     int epoll_fd_{};
     
