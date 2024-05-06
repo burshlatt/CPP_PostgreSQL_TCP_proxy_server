@@ -20,7 +20,7 @@ Server::~Server() {
     close(s_socket_);
     close(epoll_fd_);
 
-    for (auto& [client_fd, pgsql_fd] : pgsql_socks_) {
+    for (auto& [client_fd, pgsql_fd] : pgsql_sockets_) {
         close(pgsql_fd);
     }
 }
@@ -169,24 +169,24 @@ void Server::HandleClientEvent(epoll_event& event) {
     if (bytes_read <= 0) {
         epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, event.data.fd, NULL);
         close(event.data.fd);
-        close(pgsql_socks_[event.data.fd]);
-        pgsql_socks_.erase(event.data.fd);
+        close(pgsql_sockets_[event.data.fd]);
+        pgsql_sockets_.erase(event.data.fd);
     } else {
         SaveLogs(std::string(buffer, bytes_read));
 
-        if (SendAll(pgsql_socks_[event.data.fd], buffer, bytes_read) < 0) {
+        if (SendAll(pgsql_sockets_[event.data.fd], buffer, bytes_read) < 0) {
             throw std::runtime_error("Error: send()");
         }
 
         memset(buffer, 0, sizeof(buffer));
 
-        bytes_read = recv(pgsql_socks_[event.data.fd], buffer, max_buffer_size_, 0);
+        bytes_read = recv(pgsql_sockets_[event.data.fd], buffer, max_buffer_size_, 0);
 
         if (bytes_read <= 0) {
             epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, event.data.fd, NULL);
             close(event.data.fd);
-            close(pgsql_socks_[event.data.fd]);
-            pgsql_socks_.erase(event.data.fd);
+            close(pgsql_sockets_[event.data.fd]);
+            pgsql_sockets_.erase(event.data.fd);
         } else {           
             SaveLogs(std::string(buffer, bytes_read));
 
@@ -236,7 +236,7 @@ void Server::EventLoop() {
             if (events[i].data.fd == s_socket_) {
                 if (AcceptNewConnection(events[i])) {
                     DisableSSL(events[i]);
-                    pgsql_socks_[events[i].data.fd] = ConnectToPGSQL();
+                    pgsql_sockets_[events[i].data.fd] = ConnectToPGSQL();
                 }
             } else {
                 HandleClientEvent(events[i]);
