@@ -140,7 +140,7 @@ void Server::SaveLogs(std::string_view request) {
         return;
     }
 
-    std::string sql_req{std::move(GetSQLRequest(request))};
+    std::string sql_req(std::move(GetSQLRequest(request)));
 
     log_file_ << sql_req << '\n';
 }
