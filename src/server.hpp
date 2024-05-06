@@ -43,7 +43,7 @@ private:
     
     struct sockaddr_in s_addr_;
 
-    std::unordered_map<int, int> pgsql_socks_;
+    std::unordered_map<int, int> pgsql_sockets_;
 
     static constexpr unsigned max_events_{512};
     static constexpr unsigned max_buffer_size_{32768};
