@@ -3,6 +3,7 @@
 
 #include <mutex>
 #include <string>
+#include <fstream>
 #include <string_view>
 #include <arpa/inet.h>
 #include <sys/epoll.h>
@@ -37,8 +38,6 @@ private:
 private:
     unsigned port_;
 
-    std::ofstream log_file_;
-
     int s_socket_{};
     int epoll_fd_{};
     
@@ -47,6 +46,8 @@ private:
     std::unordered_map<int, int> pgsql_sockets_;
 
     std::mutex mutex_;
+
+    std::ofstream log_file_;
 
     static constexpr unsigned max_events_{512};
     static constexpr unsigned max_buffer_size_{32768};
