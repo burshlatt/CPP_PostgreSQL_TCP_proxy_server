@@ -2,6 +2,7 @@
 #include <vector>
 #include <fstream>
 #include <unistd.h>
+#include <algorithm>
 #include <sys/socket.h>
 
 #include "server.hpp"
@@ -77,24 +78,6 @@ void Server::SetupEpoll() {
     }
 }
 
-bool Server::IsSSLRequest(char* buffer) {
-    static constexpr int ssl_request_code{0x04d2162f};
-
-    char tmp_buffer[8]{
-        buffer[0], buffer[1], buffer[2], buffer[3],
-        buffer[4], buffer[5], buffer[6], buffer[7],
-    };
-
-    uint32_t msg_len{ntohl(*reinterpret_cast<int*>(tmp_buffer))};
-    uint32_t ssl_code{ntohl(*reinterpret_cast<int*>(tmp_buffer + 4))};
-
-    if (msg_len == 8 && ssl_code == ssl_request_code) {
-        return true;
-    }
-
-    return false;
-}
-
 bool Server::AcceptNewConnection(epoll_event& event) {
     struct sockaddr_in c_addr;
     socklen_t c_addr_len{sizeof(c_addr)};
@@ -118,10 +101,6 @@ bool Server::AcceptNewConnection(epoll_event& event) {
 }
 
 bool Server::IsSQLRequest(std::string_view request) {
-    if (request[0] != 'P') {
-        return false;
-    }
-
     static const std::vector<std::string> tokens{
         "BEGIN", "COMMIT", "INSERT",
         "SELECT", "UPDATE", "DELETE"
@@ -142,11 +121,15 @@ std::string Server::GetSQLRequest(std::string_view request) {
         "SELECT", "UPDATE", "DELETE"
     };
 
+    std::vector<int> positions(tokens.size());
+
     for (const auto& token : tokens) {
         if (auto pos{request.find(token)}; pos != std::string::npos) {
-            request.remove_prefix(pos);
+            positions.push_back(pos);
         }
     }
+
+    request.remove_prefix(*std::min_element(positions.begin(), positions.end()));
 
     return std::string(request).substr(0, request.find('\0'));
 }
@@ -167,7 +150,7 @@ ssize_t Server::SendAll(int fd, const char* buf, size_t len) {
     size_t total{};
     ssize_t bytes{};
 
-    while(total < len) {
+    while (total < len) {
         bytes = send(fd, buf + total, len - total, 0);
 
         if (bytes == -1) {
@@ -181,8 +164,8 @@ ssize_t Server::SendAll(int fd, const char* buf, size_t len) {
 }
 
 void Server::HandleClientEvent(epoll_event& event) {
-    std::vector<char> buffer(max_buffer_size_);
-    ssize_t bytes_read{recv(event.data.fd, buffer.data(), max_buffer_size_, 0)};
+    char buffer[max_buffer_size_];
+    ssize_t bytes_read{recv(event.data.fd, buffer, max_buffer_size_, 0)};
 
     if (bytes_read <= 0) {
         epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, event.data.fd, NULL);
@@ -190,16 +173,15 @@ void Server::HandleClientEvent(epoll_event& event) {
         close(pgsql_socks_[event.data.fd]);
         pgsql_socks_.erase(event.data.fd);
     } else {
-        SaveLogs(std::string(buffer.data(), bytes_read));
+        SaveLogs(std::string(buffer, bytes_read));
 
-        if (SendAll(pgsql_socks_[event.data.fd], buffer.data(), bytes_read) < 0) {
+        if (SendAll(pgsql_socks_[event.data.fd], buffer, bytes_read) < 0) {
             throw std::runtime_error("Error: send()");
         }
 
-        buffer.clear();
-        buffer.reserve(max_buffer_size_);
+        memset(buffer, 0, sizeof(buffer));
 
-        bytes_read = recv(pgsql_socks_[event.data.fd], buffer.data(), max_buffer_size_, 0);
+        bytes_read = recv(pgsql_socks_[event.data.fd], buffer, max_buffer_size_, 0);
 
         if (bytes_read <= 0) {
             epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, event.data.fd, NULL);
@@ -207,13 +189,31 @@ void Server::HandleClientEvent(epoll_event& event) {
             close(pgsql_socks_[event.data.fd]);
             pgsql_socks_.erase(event.data.fd);
         } else {           
-            SaveLogs(std::string(buffer.data(), bytes_read));
+            SaveLogs(std::string(buffer, bytes_read));
 
-            if (SendAll(event.data.fd, buffer.data(), bytes_read) < 0) {
+            if (SendAll(event.data.fd, buffer, bytes_read) < 0) {
                 throw std::runtime_error("Error: send()");
             }
         }
     }
+}
+
+bool Server::IsSSLRequest(char* buffer) {
+    static constexpr int ssl_request_code{0x04d2162f};
+
+    char tmp_buffer[8]{
+        buffer[0], buffer[1], buffer[2], buffer[3],
+        buffer[4], buffer[5], buffer[6], buffer[7],
+    };
+
+    uint32_t msg_len{ntohl(*reinterpret_cast<int*>(tmp_buffer))};
+    uint32_t ssl_code{ntohl(*reinterpret_cast<int*>(tmp_buffer + 4))};
+
+    if (msg_len == 8 && ssl_code == ssl_request_code) {
+        return true;
+    }
+
+    return false;
 }
 
 void Server::DisableSSL(epoll_event& event) {
