@@ -167,7 +167,7 @@ std::string Server::GetSQLRequest(std::string_view request) const {
         }
     }
 
-    request.remove_prefix(*std::min(positions.begin(), positions.end()));
+    request.remove_prefix(*std::min_element(positions.begin(), positions.end()));
 
     return std::string(request.substr(0, request.find('\0')));
 }
