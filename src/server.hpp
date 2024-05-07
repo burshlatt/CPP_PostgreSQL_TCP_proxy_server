@@ -10,7 +10,7 @@
 
 class Server {
 public:
-    explicit Server(unsigned port);
+    explicit Server(char* port);
     ~Server();
 
 public:
