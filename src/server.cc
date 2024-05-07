@@ -1,6 +1,5 @@
 #include <iostream>
 #include <vector>
-#include <fcntl.h>
 #include <cstring>
 #include <unistd.h>
 #include <algorithm>
@@ -16,6 +15,10 @@ Server::Server(char* port) :
     s_addr_.sin_port = htons(port_);
 
     log_file_.open("requests.log", std::ios::app);
+
+    if (!log_file_.is_open()) {
+        throw std::runtime_error("Error opening file: " + std::to_string(errno));
+    }
 }
 
 Server::~Server() {
@@ -27,6 +30,13 @@ Server::~Server() {
     }
 }
 
+/*
+    Простая функция подключения к серверу PostgreSQL с помощью сокетов беркли по порту 5432.
+    Нужна для присвоения каждому клиенту своего уникального дескриптора, т.к каждый клиент перед отправкой SQL запросов согласно сетевому протоколу PostgreSQL,
+    сперва должен отправлять запросы на настройку сервера, например SSLRequest, затем предоставить данные на один из запросов аутентификации, затем получить от сервера AuthenticationOk и ReadyForQuery.
+    Но так как для сервера PostgreSQL этот обмен данными нужно провести всего 1 раз, а клиентов может быть много и каждый из них отправляет эти данные,
+    то появляется необходимость создавать для каждого клиента свое уникальное соединение с сервером PostgreSQL.
+*/
 int Server::ConnectToPGSQL() const {
     int pgsql_socket{socket(AF_INET, SOCK_STREAM, 0)};
 
@@ -55,6 +65,10 @@ int Server::ConnectToPGSQL() const {
     return pgsql_socket;
 }
 
+/*
+    Функция получения дескриптора сокета для моего сервера и установки для него специальных опций
+    (опции говорят о том, что порт можно переиспользовать после каждого запуска программы)
+*/
 void Server::SetupSocket() {
     s_socket_ = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -69,6 +83,9 @@ void Server::SetupSocket() {
     }
 }
 
+/*
+    Функция получения дескриптора epoll и добавления дескриптора моего сервера в список просматриваемых.
+*/
 void Server::SetupEpoll() {
     epoll_fd_ = epoll_create1(0);
     
@@ -86,18 +103,12 @@ void Server::SetupEpoll() {
     }
 }
 
-void Server::SetNonBlocking(int sockfd) const {
-    int flags{fcntl(sockfd, F_GETFL, 0)};
-
-    if (flags == -1) {
-        throw std::runtime_error("Error getting socket flags: " + std::to_string(errno));
-    }
-
-    if (fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) == -1) {
-        throw std::runtime_error("Error setting socket flags: " + std::to_string(errno));
-    }
-}
-
+/*
+    Функция принимающая новое соединение,
+    в случае успешного принятия добавляет дескритор клиента в список просматриваемых дескрипторов в epoll.
+    Устанавливает флаг EPOLLET для epoll, что означает что epoll будет работать в режиме edge-triggered,
+    то есть будет возвращать только те дескрипторы, в которых были совершены события
+*/
 bool Server::AcceptNewConnection(epoll_event& event) const {
     struct sockaddr_in c_addr;
     socklen_t c_addr_len{sizeof(c_addr)};
@@ -108,8 +119,6 @@ bool Server::AcceptNewConnection(epoll_event& event) const {
         std::cerr << "Error accepting connection: " << strerror(errno) << "\n";
         return false;
     } else {
-        SetNonBlocking(c_socket);
-
         event.events = EPOLLIN | EPOLLET;
         event.data.fd = c_socket;
 
@@ -123,6 +132,9 @@ bool Server::AcceptNewConnection(epoll_event& event) const {
     return true;
 }
 
+/*
+    Функция проверки на то, является ли запрос SQL запросом, чтобы в дальнейшем логировать его в файл.
+*/
 bool Server::IsSQLRequest(std::string_view request) const {
     static const std::vector<std::string> tokens{
         "BEGIN", "COMMIT", "INSERT",
@@ -138,6 +150,9 @@ bool Server::IsSQLRequest(std::string_view request) const {
     return false;
 }
 
+/*
+    Функция пполучения подстроки с SQL запросом из строки, которая была передана в формате из сетевого протокола PostgreSQL
+*/
 std::string Server::GetSQLRequest(std::string_view request) const {
     static const std::vector<std::string> tokens{
         "BEGIN", "COMMIT", "INSERT",
@@ -157,6 +172,9 @@ std::string Server::GetSQLRequest(std::string_view request) const {
     return std::string(request.substr(0, request.find('\0')));
 }
 
+/*
+    Функция логирования запросов в файл.
+*/
 void Server::SaveLogs(std::string_view request) {
     if (!IsSQLRequest(request)) {
         return;
@@ -167,6 +185,11 @@ void Server::SaveLogs(std::string_view request) {
     log_file_ << sql_req << '\n';
 }
 
+/*
+    Функция обработчик событий от клиентов,
+    реализует передачу данных от клиента на сервер PostgreSQL и обратно,
+    попутно логируя данные в файл.
+*/
 void Server::HandleClientEvent(epoll_event& event) {
     char buffer[max_buffer_size_];
     ssize_t bytes_read{recv(event.data.fd, buffer, max_buffer_size_, 0)};
@@ -200,6 +223,9 @@ void Server::HandleClientEvent(epoll_event& event) {
     }
 }
 
+/*
+    Функция проверки на то, является ли запрос SSLRequest, чтобы в дальнейшем отклонить SSL соединение.
+*/
 bool Server::IsSSLRequest(char* buffer) const {
     static constexpr int ssl_request_code{0x04d2162f};
 
@@ -218,6 +244,11 @@ bool Server::IsSSLRequest(char* buffer) const {
     return false;
 }
 
+/*
+    Функция передачи отказа от SSL соединения клиенту,
+    так же можно было просто отключить SSL в файлах конфигурации PostgreSQL,
+    тогда эта функция была бы не нужна, отказ отправлялся бы автоматически.
+*/
 void Server::DisableSSL(epoll_event& event) const {
     char buffer[max_buffer_size_];
     ssize_t bytes_read{recv(event.data.fd, buffer, max_buffer_size_, 0)};
@@ -229,6 +260,11 @@ void Server::DisableSSL(epoll_event& event) const {
     }
 }
 
+/*
+    Функция ожидания новых событий или подключений.
+    При успешном новом подключении, отправляется отказ от SSL,
+    затем к дескриптору клиента привязывается уникадьный дескриптор сервера PostgreSQL (Для этого была использована хэш-таблица, unordered_map)
+*/
 void Server::EventLoop() {
     std::cout << "Waiting...\n";
 
@@ -254,6 +290,9 @@ void Server::EventLoop() {
     }
 }
 
+/*
+    Основная функция запуска сервера.
+*/
 void Server::Start() {
     SetupSocket();
 
