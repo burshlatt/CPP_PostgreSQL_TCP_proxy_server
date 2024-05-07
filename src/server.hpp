@@ -20,7 +20,6 @@ private:
     void EventLoop();
     void SetupEpoll();
     void SetupSocket();
-    void SetNonBlocking(int sockfd) const;
     void SaveLogs(std::string_view request);
     void DisableSSL(epoll_event& event) const;
     void HandleClientEvent(epoll_event& event);
