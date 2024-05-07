@@ -92,7 +92,7 @@ make test
 ## Usage
 
 1. Connect your client to the port on which the server is running.
-2. Send queries to the server in a format consistent with the PostgreSQL network protocol (https://postgrespro.ru/docs/postgresql/9.4/protocol-message-formats).
+2. Send queries to the server in a format consistent with the PostgreSQL network protocol (https://www.postgresql.org/docs/current/protocol-message-formats.html).
 3. The server will save the received requests in the requests.log file and send them to the PostgreSQL database.
 4. The server will send the response from the database to you.
 
