@@ -8,8 +8,8 @@
 
 #include "server.hpp"
 
-Server::Server(unsigned port) :
-    port_(port)
+Server::Server(char* port) :
+    port_(std::stoi(port))
 {
     s_addr_.sin_family = AF_INET;
     s_addr_.sin_addr.s_addr = INADDR_ANY;
