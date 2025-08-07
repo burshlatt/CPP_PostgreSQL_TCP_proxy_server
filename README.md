@@ -65,8 +65,10 @@ psql -h 127.0.0.1 -U postgres
 Create a new database "sbtest" and new user "sbtest":
 ```bash
 CREATE USER sbtest WITH PASSWORD '12345';
-CREATE DATABASE sbtest;
-GRANT ALL PRIVILEGES ON DATABASE sbtest TO sbtest;
+CREATE DATABASE sbtest OWNER sbtest;
+\c sbtest
+ALTER SCHEMA public OWNER TO postgres;
+GRANT USAGE, CREATE ON SCHEMA public TO sbtest;
 ```
 After creating the database, run the command to fill the table with data:
 ```bash
