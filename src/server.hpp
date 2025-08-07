@@ -27,7 +27,7 @@ private:
     // === ОСНОВНОЙ ЦИКЛ ===
     void EventLoop();
 
-    // === ОБРАБОТКА КЛИЕНТОВ ===
+    // === ОБРАБОТКА СОБЫТИЙ ===
     bool IsClientFD(int fd);
     int GetClientFD(int pgsql_fd);
     void AcceptNewConnections();
