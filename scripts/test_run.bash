@@ -9,18 +9,17 @@ PASS="12345"
 
 TEST_FILE="/usr/share/sysbench/oltp_insert.lua"
 # TEST_FILE="/usr/share/sysbench/oltp_delete.lua"
+# TEST_FILE="/usr/share/sysbench/oltp_read_write.lua"
 # TEST_FILE="/usr/share/sysbench/oltp_point_select.lua"
 # TEST_FILE="/usr/share/sysbench/oltp_update_index.lua"
-# TEST_FILE="/usr/share/sysbench/select_random_ranges.lua"
-# TEST_FILE="/usr/share/sysbench/oltp_update_non_index.lua"
+# TEST_FILE="/usr/share/sysbench/select_random_points.lua"
 
 TIME_SEC="300"
 NUM_THREADS="90"
 NUM_TABLE="10"
 TABLE_SIZE="10000"
 
-sysbench \
-    $TEST_FILE \
+sysbench $TEST_FILE \
     --db-driver=$DRIVER \
     --pgsql-host=$HOST \
     --pgsql-port=$PORT \

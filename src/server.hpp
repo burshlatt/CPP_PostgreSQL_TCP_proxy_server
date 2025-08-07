@@ -2,11 +2,13 @@
 #define TCP_PROXY_SERVER_SERVER_HPP
 
 #include <string>
+#include <vector>
 #include <fstream>
 #include <string_view>
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 #include <unordered_map>
+#include <unordered_set>
 
 class Server {
 public:
@@ -17,35 +19,46 @@ public:
     void Start();
 
 private:
+    // === ИНИЦИАЛИЗАЦИЯ ===
+    int SetupEpoll();
+    int SetupProxySocket();
+    int SetupPGSQLSocket();
+
+    // === ОСНОВНОЙ ЦИКЛ ===
     void EventLoop();
-    void SetupEpoll();
-    void SetupSocket();
+
+    // === ОБРАБОТКА КЛИЕНТОВ ===
+    bool IsClientFD(int fd);
+    int GetClientFD(int pgsql_fd);
+    void AcceptNewConnections();
+    void CloseConnection(int fd);
+    void HandleEvent(epoll_event& event);
+
+    // === ЛОГИ И SSL ===
+    void DisableSSL(epoll_event& event);
     void SaveLogs(std::string_view request);
-    void DisableSSL(epoll_event& event) const;
-    void HandleClientEvent(epoll_event& event);
 
-    int ConnectToPGSQL() const;
-
-    bool IsSSLRequest(char* buffer) const;
+    // === SQL / SSL ЛОГИКА ===
     bool IsSQLRequest(std::string_view request) const;
-    bool AcceptNewConnection(epoll_event& event) const;
+    bool IsSSLRequest(const std::vector<char>& client_data) const;
+    std::string_view GetSQLRequest(std::string_view request) const;
 
-    std::string GetSQLRequest(std::string_view request) const;
+    // === СЕТЕВОЙ ВВОД/ВЫВОД ===
+    ssize_t RecvAll(int fd, std::vector<char>& buffer);
+    bool SendAll(int fd, const std::vector<char>& buffer);
         
 private:
-    unsigned port_;
+    unsigned _port;
 
-    int s_socket_{};
-    int epoll_fd_{};
+    int _proxy_fd{};
+    int _epoll_fd{};
+
+    std::ofstream _log_file;
     
-    struct sockaddr_in s_addr_;
+    struct sockaddr_in _s_addr;
 
-    std::unordered_map<int, int> pgsql_sockets_;
-
-    std::ofstream log_file_;
-
-    static constexpr unsigned max_events_{1024};
-    static constexpr unsigned max_buffer_size_{983040};
+    std::unordered_set<int> _ssl_disabled_clients_set;
+    std::unordered_map<int, int> _client_psql_sockets_ht;
 };
 
 #endif // TCP_PROXY_SERVER_SERVER_HPP

@@ -20,4 +20,4 @@ sysbench /usr/share/sysbench/oltp_read_write.lua \
 	--pgsql-password=$PASS \
 	--tables=$NUM_TABLE \
 	--table-size=$TABLE_SIZE \
-	prepare
+	cleanup
