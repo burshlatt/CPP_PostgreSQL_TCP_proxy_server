@@ -3,7 +3,9 @@ FLAGS = -Wall -Werror -Wextra
 
 FILES = \
 	src/main.cc \
-	src/server/server.cc
+	src/server/server.cc \
+	src/server/unique_fd/unique_fd.cc \
+	src/server/sql_logger/sql_logger.cc
 
 .PHONY: build run prepare_db test clean_db clean_log clean_docs clean
 

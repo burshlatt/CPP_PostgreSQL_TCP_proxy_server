@@ -3,12 +3,14 @@
 
 #include <string>
 #include <vector>
-#include <fstream>
 #include <string_view>
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 #include <unordered_map>
 #include <unordered_set>
+
+#include "unique_fd/unique_fd.h"
+#include "sql_logger/sql_logger.h"
 
 /**
  * @class Server
@@ -38,15 +40,13 @@ public:
 private:
     /**
      * @brief Создаёт epoll.
-     * @return Дескриптор epoll.
      */
-    int SetupEpoll();
+    void SetupEpoll();
 
     /**
      * @brief Создаёт и настраивает сокет для прослушивания клиентских подключений.
-     * @return Дескриптор сокета.
      */
-    int SetupProxySocket();
+    void SetupProxySocket();
 
     /**
      * @brief Устанавливает соединение с PostgreSQL-сервером.
@@ -116,13 +116,6 @@ private:
     bool SSLDisabled(int fd) const;
 
     /**
-     * @brief Проверяет, является ли запрос SQL-запросом.
-     * @param request Буфер запроса.
-     * @return true, если SQL-запрос.
-     */
-    bool IsSQLRequest(std::string_view request) const;
-
-    /**
      * @brief Проверяет, является ли запрос SSL-запросом.
      * @param client_data Буфер с данными клиента.
      * @return true, если SSL-запрос.
@@ -134,19 +127,6 @@ private:
      * @param event epoll-событие клиента.
      */
     void DisableSSL(epoll_event& event);
-
-    /**
-     * @brief Сохраняет SQL-запрос в лог.
-     * @param request SQL-запрос.
-     */
-    void SaveLogs(std::string_view request);
-
-    /**
-     * @brief Извлекает SQL-запрос из сетевого протокольного сообщения.
-     * @param request Исходная строка.
-     * @return SQL-запрос.
-     */
-    std::string_view GetSQLRequest(std::string_view request) const;
 
     /**
      * @brief Пытается отправить данные, если есть в буфере.
@@ -174,10 +154,10 @@ private:
 private:
     unsigned _port; ///< Порт для прослушивания.
 
-    int _proxy_fd{}; ///< Дескриптор сокета прокси-сервера.
-    int _epoll_fd{}; ///< Дескриптор epoll.
+    SQLLogger _logger; ///< Класс для логирования SQL-запросов.
 
-    std::ofstream _log_file; ///< Файл логирования SQL-запросов.
+    UniqueFD _proxy_fd{}; ///< RAII-обертка над дескриптором сокета прокси-сервера.
+    UniqueFD _epoll_fd{}; ///< RAII-обертка над дескриптором epoll.
     
     struct sockaddr_in _s_addr; ///< Структура адреса сервера.
 

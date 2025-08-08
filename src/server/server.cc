@@ -8,64 +8,62 @@
 #include "server.h"
 
 Server::Server(char* port) :
-    _port(std::stoi(port))
+    _port(std::stoi(port)),
+    _logger("requests.log")
 {
     _s_addr.sin_family = AF_INET;
     _s_addr.sin_addr.s_addr = INADDR_ANY;
     _s_addr.sin_port = htons(_port);
-
-    _log_file.open("requests.log", std::ios::app);
-
-    if (!_log_file.is_open()) {
-        throw std::runtime_error("Server::Server() error opening file: " + std::to_string(errno));
-    }
 }
 
 Server::~Server() {
-    close(_proxy_fd);
-    close(_epoll_fd);
-
     for (auto& [client_fd, pgsql_fd] : _client_psql_sockets_ht) {
         close(pgsql_fd);
         close(client_fd);
     }
 }
 
-int Server::SetupProxySocket() {
-    int proxy_fd{socket(AF_INET, SOCK_STREAM, 0)};
+void Server::SetupEpoll() {
+    _epoll_fd = UniqueFD(epoll_create1(0));
+    
+    if (!_epoll_fd.Valid()) {
+        throw std::runtime_error("SetupEpoll() error creating epoll instance: " + std::to_string(errno));
+    }
+}
 
-    if (proxy_fd == -1) {
+void Server::SetupProxySocket() {
+    _proxy_fd = UniqueFD(socket(AF_INET, SOCK_STREAM, 0));
+
+    if (!_proxy_fd.Valid()) {
         throw std::runtime_error("SetupProxySocket() error creating socket: " + std::to_string(errno));
     }
 
-    int flags{fcntl(proxy_fd, F_GETFL, 0)};
-    fcntl(proxy_fd, F_SETFL, flags | O_NONBLOCK);
+    int flags{fcntl(_proxy_fd, F_GETFL, 0)};
+    fcntl(_proxy_fd, F_SETFL, flags | O_NONBLOCK);
 
     int opt{1};
 
-    if (setsockopt(proxy_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
+    if (setsockopt(_proxy_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
         throw std::runtime_error("SetupProxySocket() error setting socket options: " + std::to_string(errno));
+    }
+
+    auto s_addr{reinterpret_cast<struct sockaddr*>(&_s_addr)};
+
+    if (bind(_proxy_fd, s_addr, sizeof(_s_addr)) == -1) {
+        throw std::runtime_error("Socket binding error!");
+    }
+
+    if (listen(_proxy_fd, SOMAXCONN) == -1) {
+        throw std::runtime_error("Socket listening Error!");
     }
 
     epoll_event event;
     event.events = EPOLLIN | EPOLLET;
-    event.data.fd = proxy_fd;
+    event.data.fd = _proxy_fd;
 
-    if (epoll_ctl(_epoll_fd, EPOLL_CTL_ADD, proxy_fd, &event) == -1) {
+    if (epoll_ctl(_epoll_fd, EPOLL_CTL_ADD, _proxy_fd, &event) == -1) {
         throw std::runtime_error("SetupProxySocket() error adding socket to epoll: " + std::to_string(errno));
     }
-
-    return proxy_fd;
-}
-
-int Server::SetupEpoll() {
-    int epoll_fd{epoll_create1(0)};
-    
-    if (epoll_fd == -1) {
-        throw std::runtime_error("SetupEpoll() error creating epoll instance: " + std::to_string(errno));
-    }
-
-    return epoll_fd;
 }
 
 int Server::SetupPGSQLSocket() {
@@ -153,29 +151,6 @@ void Server::AcceptNewConnections() {
             std::cerr << "ConnectToPGSQL() connection failed: " << e.what() << "\n";
         }
     }
-}
-
-bool Server::IsSQLRequest(std::string_view request) const {
-    return !request.empty() && request[0] == 'Q';
-}
-
-std::string_view Server::GetSQLRequest(std::string_view request) const {
-    if (request.back() == '\0') {
-        request.remove_suffix(1); // Убираем нулевой терминатор
-    }
-
-    return request.substr(5); // Убираем первые 5 байт (1 - Тип сообщения, 4 - размер сообщения)
-}
-
-void Server::SaveLogs(std::string_view request) {
-    if (!IsSQLRequest(request)) {
-        return;
-    }
-
-    std::string sql_req(GetSQLRequest(request));
-
-    _log_file.write(sql_req.data(), sql_req.size());
-    _log_file << std::endl;
 }
 
 bool Server::IsClientFD(int fd) {
@@ -393,7 +368,7 @@ void Server::HandleEvent(epoll_event& event) {
             }
         }
 
-        SaveLogs(std::string_view(data.data(), data.size()));
+        _logger.SaveLogs(std::string_view(data.data(), data.size()));
     }
 
     SendBuffer(peer_fd, data);
@@ -431,18 +406,7 @@ void Server::EventLoop() {
 }
 
 void Server::Start() {
-    _epoll_fd = SetupEpoll();
-    _proxy_fd = SetupProxySocket();
-
-    auto s_addr{reinterpret_cast<struct sockaddr*>(&_s_addr)};
-
-    if (bind(_proxy_fd, s_addr, sizeof(_s_addr)) == -1) {
-        throw std::runtime_error("Socket binding error!");
-    }
-
-    if (listen(_proxy_fd, SOMAXCONN) == -1) {
-        throw std::runtime_error("Socket listening Error!");
-    }
-
+    SetupEpoll();
+    SetupProxySocket();
     EventLoop();
 }
