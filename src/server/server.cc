@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <sys/socket.h>
 
-#include "server.hpp"
+#include "server.h"
 
 Server::Server(char* port) :
     _port(std::stoi(port))
@@ -31,9 +31,6 @@ Server::~Server() {
     }
 }
 
-/*
-    Функция установки и настройки сокета прокси сервера.
-*/
 int Server::SetupProxySocket() {
     int proxy_fd{socket(AF_INET, SOCK_STREAM, 0)};
 
@@ -50,7 +47,7 @@ int Server::SetupProxySocket() {
         throw std::runtime_error("SetupProxySocket() error setting socket options: " + std::to_string(errno));
     }
 
-    struct epoll_event event;
+    epoll_event event;
     event.events = EPOLLIN | EPOLLET;
     event.data.fd = proxy_fd;
 
@@ -61,9 +58,6 @@ int Server::SetupProxySocket() {
     return proxy_fd;
 }
 
-/*
-    Функция получения дескриптора epoll и добавления дескриптора прокси сервера в список просматриваемых.
-*/
 int Server::SetupEpoll() {
     int epoll_fd{epoll_create1(0)};
     
@@ -74,10 +68,6 @@ int Server::SetupEpoll() {
     return epoll_fd;
 }
 
-/*
-    Функция открытия и настройки нового сокета psql сервера для нового клиента.
-    В случае успешного открытия добавляет дескритор в список просматриваемых дескрипторов в epoll.
-*/
 int Server::SetupPGSQLSocket() {
     int pgsql_fd{socket(AF_INET, SOCK_STREAM, 0)};
 
@@ -111,19 +101,15 @@ int Server::SetupPGSQLSocket() {
     event.events = EPOLLIN | EPOLLET;
     event.data.fd = pgsql_fd;
 
-    if (epoll_ctl(_epoll_fd, EPOLL_CTL_ADD, pgsql_fd, &event) == -1) { // ??? ТУТ ЗАКРЫВАТЬ СОКЕТ pgsql_fd ???
+    if (epoll_ctl(_epoll_fd, EPOLL_CTL_ADD, pgsql_fd, &event) == -1) {
+        close(pgsql_fd);
+
         throw std::runtime_error("SetupPGSQLSocket() error adding socket to epoll: " + std::to_string(errno));
     }
 
     return pgsql_fd;
 }
 
-/*
-    Функция принимающая новое соединение,
-    в случае успешного принятия добавляет дескритор клиента в список просматриваемых дескрипторов в epoll.
-    Устанавливает флаг EPOLLET для epoll, что означает что epoll будет работать в режиме edge-triggered,
-    то есть будет возвращать только те дескрипторы, в которых были совершены события
-*/
 void Server::AcceptNewConnections() {
     while (true) {
         struct sockaddr_in c_addr;
@@ -150,9 +136,9 @@ void Server::AcceptNewConnections() {
         event.data.fd = client_fd;
 
         if (epoll_ctl(_epoll_fd, EPOLL_CTL_ADD, client_fd, &event) == -1) {
-            std::cerr << "epoll_ctl() error: " << strerror(errno) << "\n";
-
             close(client_fd);
+
+            std::cerr << "epoll_ctl() error: " << strerror(errno) << "\n";
 
             continue;
         }
@@ -169,16 +155,10 @@ void Server::AcceptNewConnections() {
     }
 }
 
-/*
-    Функция проверки на то, является ли запрос SQL запросом, чтобы в дальнейшем логировать его в файл.
-*/
 bool Server::IsSQLRequest(std::string_view request) const {
     return !request.empty() && request[0] == 'Q';
 }
 
-/*
-    Функция пполучения подстроки с SQL запросом из строки, которая была передана в формате из сетевого протокола PostgreSQL
-*/
 std::string_view Server::GetSQLRequest(std::string_view request) const {
     if (request.back() == '\0') {
         request.remove_suffix(1); // Убираем нулевой терминатор
@@ -187,9 +167,6 @@ std::string_view Server::GetSQLRequest(std::string_view request) const {
     return request.substr(5); // Убираем первые 5 байт (1 - Тип сообщения, 4 - размер сообщения)
 }
 
-/*
-    Функция логирования запросов в файл.
-*/
 void Server::SaveLogs(std::string_view request) {
     if (!IsSQLRequest(request)) {
         return;
@@ -199,21 +176,12 @@ void Server::SaveLogs(std::string_view request) {
 
     _log_file.write(sql_req.data(), sql_req.size());
     _log_file << std::endl;
-
-    // _log_file.write(request.data(), request.size());
-    // _log_file << std::endl;
 }
 
-/*
-    Функция проверки является ли этот дескриптор клиентским.
-*/
 bool Server::IsClientFD(int fd) {
     return _client_psql_sockets_ht.find(fd) != _client_psql_sockets_ht.end();
 }
 
-/*
-    Функция получение связанного клиентского дескриптора с pgsql дескриптором.
-*/
 int Server::GetClientFD(int pgsql_fd) {
     for (const auto& it : _client_psql_sockets_ht) {
         if (it.second == pgsql_fd) {
@@ -224,9 +192,6 @@ int Server::GetClientFD(int pgsql_fd) {
     return -1;
 }
 
-/*
-    Функция закрытия соединения между клиентом и pgsql сервером.
-*/
 void Server::CloseConnection(int fd) {
     int pgsql_fd{-1};
     int client_fd{-1};
@@ -254,9 +219,22 @@ void Server::CloseConnection(int fd) {
     close(client_fd);
 }
 
-/*
-    Функция чтения данных.
-*/
+void Server::AddEpollOut(int fd) {
+    epoll_event event;
+    event.data.fd = fd;
+    event.events = EPOLLIN | EPOLLOUT | EPOLLET;
+
+    epoll_ctl(_epoll_fd, EPOLL_CTL_MOD, fd, &event);
+}
+
+void Server::RemoveEpollOut(int fd) {
+    epoll_event event;
+    event.data.fd = fd;
+    event.events = EPOLLIN | EPOLLET;
+
+    epoll_ctl(_epoll_fd, EPOLL_CTL_MOD, fd, &event);
+}
+
 ssize_t Server::RecvAll(int fd, std::vector<char>& buffer) {
     ssize_t bytes_read{0};
 
@@ -291,11 +269,16 @@ ssize_t Server::RecvAll(int fd, std::vector<char>& buffer) {
     return bytes_read;
 }
 
-/*
-    Функция отправки данных.
-*/
-bool Server::SendAll(int fd, const std::vector<char>& buffer) {
+bool Server::SendBuffer(int fd, const std::vector<char>& data) {
+    auto& buffer{_send_buffers_ht[fd]};
+    buffer.insert(buffer.end(), data.begin(), data.end());
+
+    return TrySend(fd);
+}
+
+bool Server::TrySend(int fd) {
     size_t bytes_sent{0};
+    auto& buffer{_send_buffers_ht[fd]};
 
     while (bytes_sent < buffer.size()) {
         ssize_t n{send(fd, buffer.data() + bytes_sent, buffer.size() - bytes_sent, 0)};
@@ -304,7 +287,11 @@ bool Server::SendAll(int fd, const std::vector<char>& buffer) {
             bytes_sent += n;
         } else if (n == -1) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                break;
+                AddEpollOut(fd);
+
+                buffer.erase(buffer.begin(), buffer.begin() + bytes_sent);
+
+                return true;
             } else if (errno == EINTR) {
                 continue;
             }
@@ -317,12 +304,13 @@ bool Server::SendAll(int fd, const std::vector<char>& buffer) {
         }
     }
 
+    RemoveEpollOut(fd);
+
+    _send_buffers_ht.erase(fd);
+
     return true;
 }
 
-/*
-    Функция проверки является ли запрос SSLRequest'ом, чтобы в дальнейшем отклонить SSL соединение.
-*/
 bool Server::IsSSLRequest(const std::vector<char>& client_data) const {
     if (client_data.size() != 8) {
         return false;
@@ -343,9 +331,6 @@ bool Server::IsSSLRequest(const std::vector<char>& client_data) const {
     return false;
 }
 
-/*
-    Функция передачи отказа от SSL соединения клиенту.
-*/
 void Server::DisableSSL(epoll_event& event) {
     int client_fd{event.data.fd};
     const char ssl_deny_msg{'N'};
@@ -357,30 +342,29 @@ void Server::DisableSSL(epoll_event& event) {
     }
 }
 
-/*
-    Функция обработчик событий,
-    реализует передачу данных от клиента на сервер PostgreSQL и обратно,
-    попутно логируя данные в файл.
-*/
+bool Server::SSLDisabled(int fd) const {
+    return _ssl_disabled_clients_set.find(fd) != _ssl_disabled_clients_set.end();
+}
+
 void Server::HandleEvent(epoll_event& event) {
     int peer_fd{-1};
     int fd{event.data.fd};
-    bool is_client{_client_psql_sockets_ht.find(fd) != _client_psql_sockets_ht.end()};
+    bool is_client{IsClientFD(fd)};
 
     if (is_client) {
         peer_fd = _client_psql_sockets_ht[fd];
     } else {
-        for (const auto& [client_fd, pgsql_fd] : _client_psql_sockets_ht) {
-            if (pgsql_fd == fd) {
-                peer_fd = client_fd;
-                
-                break;
-            }
-        }
+        peer_fd = GetClientFD(fd);
     }
 
     if (peer_fd == -1) {
         std::cerr << "HandleEvent() unknown fd in epoll: " << fd << "\n";
+
+        return;
+    }
+
+    if (event.events & EPOLLOUT) {
+        TrySend(fd);
 
         return;
     }
@@ -391,35 +375,30 @@ void Server::HandleEvent(epoll_event& event) {
         return;
     }
 
-    if (!data.empty()) {
-        if (is_client) {
-            bool ssl_disabled{_ssl_disabled_clients_set.find(fd) != _ssl_disabled_clients_set.end()};
-
-            if (!ssl_disabled) {
-                if (IsSSLRequest(data)) {
-                    DisableSSL(event);
-
-                    return;
-                }
-            }
-
-            SaveLogs(std::string_view(data.data(), data.size()));
-        }
-
-        if (!SendAll(peer_fd, data)) {
-            return;
-        }
+    if (data.empty()) {
+        return;
     }
+
+    if (is_client) {
+        if (!SSLDisabled(fd)) {
+            if (IsSSLRequest(data)) {
+                DisableSSL(event);
+
+                return;
+            }
+        }
+
+        SaveLogs(std::string_view(data.data(), data.size()));
+    }
+
+    SendBuffer(peer_fd, data);
 }
 
-/*
-    Функция ожидания новых событий или подключений.
-*/
 void Server::EventLoop() {
     std::cout << "Waiting...\n";
 
     const unsigned max_events{1024};
-    std::vector<struct epoll_event> events(max_events);
+    std::vector<epoll_event> events(max_events);
 
     while (true) {
         int num_events{epoll_wait(_epoll_fd, events.data(), max_events, -1)};
@@ -443,15 +422,9 @@ void Server::EventLoop() {
                 HandleEvent(events[i]);
             }
         }
-
-        events.clear();
-        events.reserve(max_events);
     }
 }
 
-/*
-    Основная функция запуска сервера.
-*/
 void Server::Start() {
     _epoll_fd = SetupEpoll();
     _proxy_fd = SetupProxySocket();

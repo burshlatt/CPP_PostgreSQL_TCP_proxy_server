@@ -1,10 +1,14 @@
 CXX = g++
 FLAGS = -Wall -Werror -Wextra
 
-.PHONY: build run prepare_db test clean_log clean
+FILES = \
+	src/main.cc \
+	src/server/server.cc
+
+.PHONY: build run prepare_db test clean_db clean_log clean_docs clean
 
 build:
-	$(CXX) $(FLAGS) src/*.cc -o server
+	$(CXX) $(FLAGS) $(FILES) -o server
 
 run:
 	./server 5656
@@ -12,14 +16,20 @@ run:
 prepare_db:
 	sh scripts/prepare.bash
 
-clean_db:
-	sh scripts/cleanup.bash
-
 test:
 	sh scripts/test_run.bash
+
+docs:
+	doxygen Doxyfile
+
+clean_db:
+	sh scripts/cleanup.bash
 
 clean_log:
 	rm -rf requests.log
 
-clean: clean_log
+clean_docs:
+	rm -rf docs
+
+clean: clean_log clean_docs
 	rm -rf server

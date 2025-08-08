@@ -8,7 +8,6 @@ USER="sbtest"
 PASS="12345"
 
 TEST_FILE="/usr/share/sysbench/oltp_insert.lua"
-# TEST_FILE="/usr/share/sysbench/oltp_delete.lua"
 # TEST_FILE="/usr/share/sysbench/oltp_read_write.lua"
 # TEST_FILE="/usr/share/sysbench/oltp_point_select.lua"
 # TEST_FILE="/usr/share/sysbench/oltp_update_index.lua"
@@ -26,6 +25,7 @@ sysbench $TEST_FILE \
     --pgsql-db=$DB \
 	--pgsql-user=$USER \
 	--pgsql-password=$PASS \
+    --db-ps-mode=disable \
     --time=$TIME_SEC \
     --threads=$NUM_THREADS \
     --tables=$NUM_TABLE \
