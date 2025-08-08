@@ -91,6 +91,12 @@ private:
     void AcceptNewConnections();
 
     /**
+     * @brief Закрывает сокет.
+     * @param fd Дескриптор, связанный с клиентом или PostgreSQL.
+     */
+    void SafeCloseFD(int fd);
+
+    /**
      * @brief Закрывает соединение с клиентом и PostgreSQL.
      * @param fd Дескриптор, связанный с клиентом или PostgreSQL.
      */

@@ -192,6 +192,13 @@ int Server::GetClientFD(int pgsql_fd) {
     return -1;
 }
 
+void Server::SafeCloseFD(int fd) {
+    if (fd >= 0) {
+        epoll_ctl(_epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+        close(fd);
+    }
+}
+
 void Server::CloseConnection(int fd) {
     int pgsql_fd{-1};
     int client_fd{-1};
@@ -212,11 +219,8 @@ void Server::CloseConnection(int fd) {
         }
     }
 
-    epoll_ctl(_epoll_fd, EPOLL_CTL_DEL, pgsql_fd, nullptr);
-    epoll_ctl(_epoll_fd, EPOLL_CTL_DEL, client_fd, nullptr);
-
-    close(pgsql_fd);
-    close(client_fd);
+    SafeCloseFD(pgsql_fd);
+    SafeCloseFD(client_fd);
 }
 
 void Server::AddEpollOut(int fd) {
@@ -236,10 +240,11 @@ void Server::RemoveEpollOut(int fd) {
 }
 
 ssize_t Server::RecvAll(int fd, std::vector<char>& buffer) {
+    constexpr size_t BUFFER_SIZE{4096};
     ssize_t bytes_read{0};
 
     while (true) {
-        char temp[4096];
+        char temp[BUFFER_SIZE];
         ssize_t n{recv(fd, temp, sizeof(temp), 0)};
 
         if (n > 0) {
@@ -397,11 +402,11 @@ void Server::HandleEvent(epoll_event& event) {
 void Server::EventLoop() {
     std::cout << "Waiting...\n";
 
-    const unsigned max_events{1024};
-    std::vector<epoll_event> events(max_events);
+    constexpr size_t MAX_EVENTS{1024};
+    std::vector<epoll_event> events(MAX_EVENTS);
 
     while (true) {
-        int num_events{epoll_wait(_epoll_fd, events.data(), max_events, -1)};
+        int num_events{epoll_wait(_epoll_fd, events.data(), MAX_EVENTS, -1)};
 
         if (num_events == -1) {
             if (errno == EINTR) {
