@@ -46,7 +46,7 @@ private:
     /**
      * @brief Создаёт и настраивает сокет для прослушивания клиентских подключений.
      */
-    void SetupProxySocket();
+    void SetupServerSocket();
 
     /**
      * @brief Устанавливает соединение с PostgreSQL-сервером.
@@ -158,8 +158,6 @@ private:
 
     UniqueFD _proxy_fd{}; ///< RAII-обертка над дескриптором сокета прокси-сервера.
     UniqueFD _epoll_fd{}; ///< RAII-обертка над дескриптором epoll.
-    
-    struct sockaddr_in _s_addr; ///< Структура адреса сервера.
 
     std::unordered_set<int> _ssl_disabled_clients_set; ///< Множество клиентов с отключенным SSL.
     std::unordered_map<int, int> _client_psql_sockets_ht; ///< Соответствие клиент ↔ PostgreSQL.
