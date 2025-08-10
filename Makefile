@@ -1,11 +1,11 @@
 CXX = g++
-FLAGS = -Wall -Werror -Wextra
+FLAGS = -Wall -Werror -Wextra -std=c++17
 
 FILES = \
 	src/main.cc \
 	src/server/server.cc \
-	src/server/unique_fd/unique_fd.cc \
-	src/server/sql_logger/sql_logger.cc
+	src/server/logger/logger.cc \
+	src/server/unique_fd/unique_fd.cc
 
 .PHONY: build run prepare_db test clean_db clean_log clean_docs clean
 

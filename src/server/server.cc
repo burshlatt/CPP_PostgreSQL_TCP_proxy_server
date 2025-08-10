@@ -1,4 +1,6 @@
 #include <iostream>
+#include <atomic>
+#include <csignal>
 #include <fcntl.h>
 #include <cstring>
 #include <unistd.h>
@@ -7,10 +9,20 @@
 
 #include "server.h"
 
+std::atomic<bool> stop_flag(false);
+
+void signal_handler(int signal) {
+    if (signal == SIGINT) {
+        stop_flag = true;
+    }
+}
+
 Server::Server(char* port) :
     _port(std::stoi(port)),
     _logger("requests.log")
 {
+    std::signal(SIGINT, signal_handler);
+
     SetupEpoll();
     SetupServerSocket();
 }
@@ -108,19 +120,21 @@ int Server::SetupPGSQLSocket() {
         throw std::runtime_error("SetupPGSQLSocket() error adding socket to epoll: " + std::to_string(errno));
     }
 
+    Connection& conn{_fd_connection_ht[pgsql_fd]};
+    conn.pgsql.fd = pgsql_fd;
+    conn.pgsql.ip = inet_ntoa(pgsql_addr.sin_addr);
+    conn.pgsql.port = pgsql_addr.sin_port;
+
     return pgsql_fd;
 }
 
 void Server::AcceptNewConnections() {
-    int client_fd{-1};
-    int pgsql_fd{-1};
-
     while (true) {
         struct sockaddr_in client_addr;
         auto c_addr{reinterpret_cast<sockaddr*>(&client_addr)};
         socklen_t c_addr_len{sizeof(client_addr)};
 
-        client_fd = accept(_proxy_fd, c_addr, &c_addr_len);
+        int client_fd{accept(_proxy_fd, c_addr, &c_addr_len)};
 
         if (client_fd == -1) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -150,14 +164,19 @@ void Server::AcceptNewConnections() {
         }
 
         try {
-            pgsql_fd = SetupPGSQLSocket();
+            int pgsql_fd{SetupPGSQLSocket()};
+
             _client_psql_sockets_ht[client_fd] = pgsql_fd;
 
-            std::cout << "Accepted the new connection. Client: " << client_fd << ", PGSQL: " << pgsql_fd << '\n';
+            Connection& conn{_fd_connection_ht[pgsql_fd]};
+            conn.client.fd = client_fd;
+            conn.client.ip = inet_ntoa(client_addr.sin_addr);
+            conn.client.port = client_addr.sin_port;
+            conn.conn_status = ConnectionStatus::K_OPEN;
+
+            _logger.PrintInTerminal(conn);
         } catch (const std::exception& e) {
             close(client_fd);
-
-            _client_psql_sockets_ht.erase(client_fd);
 
             std::cerr << "ConnectToPGSQL() connection failed: " << e.what() << '\n';
         }
@@ -208,7 +227,10 @@ void Server::CloseConnection(int fd) {
     SafeCloseFD(pgsql_fd);
     SafeCloseFD(client_fd);
 
-    std::cout << "Close the connection. Client: " << client_fd << ", PGSQL: " << pgsql_fd << '\n';
+    Connection& conn{_fd_connection_ht[pgsql_fd]};
+    conn.conn_status = ConnectionStatus::K_CLOSED;
+
+    _logger.PrintInTerminal(conn);
 }
 
 void Server::AddEpollOut(int fd) {
@@ -381,7 +403,10 @@ void Server::HandleEvent(epoll_event& event) {
             }
         }
 
-        _logger.SaveLogs(std::string_view(data.data(), data.size()));
+        auto& connection{_fd_connection_ht[peer_fd]};
+        std::string_view message(data.data(), data.size());
+
+        _logger.SaveLogs(connection.client, message);
     }
 
     SendBuffer(peer_fd, data);
@@ -393,7 +418,7 @@ void Server::EventLoop() {
     constexpr size_t MAX_EVENTS{1024};
     std::vector<epoll_event> events(MAX_EVENTS);
 
-    while (true) {
+    while (!stop_flag) {
         int num_events{epoll_wait(_epoll_fd, events.data(), MAX_EVENTS, -1)};
 
         if (num_events == -1) {

@@ -1,5 +1,5 @@
-#ifndef TCP_PROXY_SERVER_SERVER_HPP
-#define TCP_PROXY_SERVER_SERVER_HPP
+#ifndef CPP_POSTGRESQL_TCP_PROXY_SERVER_SERVER_SERVER_H
+#define CPP_POSTGRESQL_TCP_PROXY_SERVER_SERVER_SERVER_H
 
 #include <string>
 #include <vector>
@@ -9,8 +9,9 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "logger/logger.h"
 #include "unique_fd/unique_fd.h"
-#include "sql_logger/sql_logger.h"
+#include "connection_info/connection_info.h"
 
 /**
  * @class Server
@@ -154,14 +155,15 @@ private:
 private:
     unsigned _port; ///< Порт для прослушивания.
 
-    SQLLogger _logger; ///< Класс для логирования SQL-запросов.
+    Logger _logger; ///< Класс для логирования запросов и информации о соединениях.
 
     UniqueFD _proxy_fd{}; ///< RAII-обертка над дескриптором сокета прокси-сервера.
     UniqueFD _epoll_fd{}; ///< RAII-обертка над дескриптором epoll.
 
     std::unordered_set<int> _ssl_disabled_clients_set; ///< Множество клиентов с отключенным SSL.
-    std::unordered_map<int, int> _client_psql_sockets_ht; ///< Соответствие клиент ↔ PostgreSQL.
-    std::unordered_map<int, std::vector<char>> _send_buffers_ht; ///< Буферы отправки по дескрипторам.
+    std::unordered_map<int, int> _client_psql_sockets_ht; ///< Соответствие клиент fd ↔ PostgreSQL fd.
+    std::unordered_map<int, Connection> _fd_connection_ht; ///< Соответствие pgsql fd ↔ информаиця о соединении.
+    std::unordered_map<int, std::vector<char>> _send_buffers_ht; ///< Соответствие fd ↔ Буфер отправки.
 };
 
-#endif // TCP_PROXY_SERVER_SERVER_HPP
+#endif // CPP_POSTGRESQL_TCP_PROXY_SERVER_SERVER_SERVER_H

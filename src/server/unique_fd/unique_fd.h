@@ -1,5 +1,5 @@
-#ifndef UNIQUE_FD_H
-#define UNIQUE_FD_H
+#ifndef CPP_POSTGRESQL_TCP_PROXY_SERVER_SERVER_UNIQUE_FD_UNIQUE_FD_H
+#define CPP_POSTGRESQL_TCP_PROXY_SERVER_SERVER_UNIQUE_FD_UNIQUE_FD_H
 
 /**
  * @class UniqueFD
@@ -65,4 +65,4 @@ private:
     int _fd; ///< Дескриптор сокета.
 };
 
-#endif // UNIQUE_FD_H
+#endif // CPP_POSTGRESQL_TCP_PROXY_SERVER_SERVER_UNIQUE_FD_UNIQUE_FD_H
