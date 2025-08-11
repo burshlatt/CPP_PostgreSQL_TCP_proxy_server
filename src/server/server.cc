@@ -211,8 +211,6 @@ void Server::CloseConnection(int fd) {
     if (IsClientFD(fd)) {
         client_fd = fd;
         pgsql_fd = _client_psql_sockets_ht[client_fd];
-
-        _client_psql_sockets_ht.erase(client_fd);
     } else {
         pgsql_fd = fd;
         client_fd = GetClientFD(pgsql_fd);
@@ -226,6 +224,8 @@ void Server::CloseConnection(int fd) {
 
     SafeCloseFD(pgsql_fd);
     SafeCloseFD(client_fd);
+
+    _client_psql_sockets_ht.erase(client_fd);
 
     Connection& conn{_fd_connection_ht[pgsql_fd]};
     conn.conn_status = ConnectionStatus::K_CLOSED;
@@ -284,14 +284,14 @@ ssize_t Server::RecvAll(int fd, std::vector<char>& buffer) {
     return bytes_read;
 }
 
-bool Server::SendBuffer(int fd, const std::vector<char>& data) {
+void Server::SendBuffer(int fd, const std::vector<char>& data) {
     auto& buffer{_send_buffers_ht[fd]};
     buffer.insert(buffer.end(), data.begin(), data.end());
 
-    return TrySend(fd);
+    TrySend(fd);
 }
 
-bool Server::TrySend(int fd) {
+void Server::TrySend(int fd) {
     size_t bytes_sent{0};
     auto& buffer{_send_buffers_ht[fd]};
 
@@ -306,7 +306,7 @@ bool Server::TrySend(int fd) {
 
                 buffer.erase(buffer.begin(), buffer.begin() + bytes_sent);
 
-                return true;
+                return;
             } else if (errno == EINTR) {
                 continue;
             }
@@ -315,15 +315,13 @@ bool Server::TrySend(int fd) {
 
             CloseConnection(fd);
 
-            return false;
+            return;
         }
     }
 
     RemoveEpollOut(fd);
 
     _send_buffers_ht.erase(fd);
-
-    return true;
 }
 
 bool Server::IsSSLRequest(const std::vector<char>& client_data) const {

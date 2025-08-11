@@ -132,17 +132,15 @@ private:
     /**
      * @brief Пытается отправить данные, если есть в буфере.
      * @param fd Дескриптор для отправки.
-     * @return true, если успешно или частично отправлено.
      */
-    bool TrySend(int fd);
+    void TrySend(int fd);
 
     /**
      * @brief Отправляет данные, добавляя их в буфер отправки.
      * @param fd Дескриптор.
      * @param data Данные для отправки.
-     * @return true, если успешно добавлено и передано.
      */
-    bool SendBuffer(int fd, const std::vector<char>& data);
+    void SendBuffer(int fd, const std::vector<char>& data);
 
     /**
      * @brief Принимает все доступные данные с сокета.
