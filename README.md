@@ -20,15 +20,15 @@ This project is a simple TCP proxy server capable of accepting incoming TCP conn
 
     ```bash
     cd PostgreSQL_TCP_proxy_server
-    make install
+    make build
     ```
 
 ## Uninstallation
 
-1. To uninstall the program:
+1. To clean up the project:
 
     ```bash
-    make uninstall
+    make clean
     ```
 
 2. To delete the log files:
@@ -36,11 +36,11 @@ This project is a simple TCP proxy server capable of accepting incoming TCP conn
     ```bash
     make clean_log
     ```
-
-3. To clean up the project:
+    
+3. To delete the doxygen files:
 
     ```bash
-    make clean
+    make clean_docs
     ```
 
 ## Installing sysbench
@@ -53,7 +53,6 @@ sudo apt -y install sysbench
 Verify the version:
 ```bash
 sysbench --version
-sysbench 1.0.20
 ```
 
 ## Database preparation
@@ -80,8 +79,7 @@ make prepare_db
 After successful compilation, the server can be started by executing the following command:
 
 ```bash
-./server <port>
-Example: ./server 5656
+./server <port> # or 'make run' to start the server on port 5656
 ```
 
 ## Running tests
