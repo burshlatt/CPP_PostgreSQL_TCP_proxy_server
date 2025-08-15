@@ -3,165 +3,138 @@
 
 #include <string>
 #include <vector>
+#include <memory>
 #include <string_view>
-#include <arpa/inet.h>
-#include <sys/epoll.h>
 #include <unordered_map>
-#include <unordered_set>
+
+#include <sys/epoll.h>
 
 #include "logger/logger.h"
+#include "session/session.h"
 #include "unique_fd/unique_fd.h"
-#include "connection_info/connection_info.h"
+#include "connection/connection.h"
 
 /**
  * @class Server
- * @brief TCP-прокси сервер для обработки подключений и переадресации запросов на PostgreSQL.
+ * @brief Класс для реализации асинхронного прокси-сервера с использованием epoll и подключением к PostgreSQL.
  *
- * Сервер реализует работу с epoll, управляет клиентскими подключениями,
- * логирует SQL-запросы и обрабатывает отказ от SSL.
+ * Сервер принимает клиентские соединения, устанавливает соединение с PostgreSQL, проксирует данные
+ * и логирует запросы. Основан на неблокирующем вводе-выводе и механизме epoll.
  */
 class Server {
 public:
     /**
      * @brief Конструктор сервера.
-     * @param port Порт, на котором запускается сервер.
+     * @param listen_port Порт, на котором сервер будет слушать входящие подключения.
+     * @param db_host IP-адрес хоста PostgreSQL.
+     * @param db_port Порт PostgreSQL.
+     * @param log_file Путь к файлу логов.
+     * @throw std::invalid_argument Если передан некорректный порт или хост.
      */
-    explicit Server(char* port);
+    Server(int listen_port, const std::string& db_host, int db_port, const std::string& log_file);
 
     /**
-     * @brief Деструктор сервера. Закрывает все открытые дескрипторы и освобождает ресурсы.
+     * @brief Запускает сервер.
+     *
+     * Устанавливает обработчик сигналов, настраивает epoll, серверный сокет и запускает основной цикл обработки событий.
      */
-    ~Server();
-
-    /**
-     * @brief Запускает сервер: инициализация, биндинг и основной цикл событий.
-     */
-    void Start();
+    void Run();
 
 private:
     /**
-     * @brief Создаёт epoll.
+     * @brief Создает epoll-дескриптор и проверяет корректность.
+     * @throw std::runtime_error Если epoll не удалось создать.
      */
     void SetupEpoll();
 
     /**
-     * @brief Создаёт и настраивает сокет для прослушивания клиентских подключений.
+     * @brief Настраивает серверный сокет для прослушивания клиентских подключений.
+     *
+     * Сокет устанавливается в неблокирующий режим, привязывается к IP/порту, включается опция SO_REUSEADDR
+     * и добавляется в epoll.
+     * @throw std::runtime_error Если не удалось создать, настроить или привязать сокет.
      */
     void SetupServerSocket();
 
     /**
-     * @brief Устанавливает соединение с PostgreSQL-сервером.
-     * @return Дескриптор подключения к PostgreSQL.
+     * @brief Устанавливает подключение к PostgreSQL.
+     *
+     * Создает сокет, подключается к указанному хосту и порту PostgreSQL, переводит его в неблокирующий режим
+     * и добавляет в epoll для отслеживания событий.
+     * @return Объект UniqueFD с файловым дескриптором PostgreSQL.
+     * @throw std::runtime_error Если не удалось создать или подключить сокет.
      */
-    int SetupPGSQLSocket();
+    UniqueFD SetupPGSQLSocket();
 
     /**
-     * @brief Основной цикл обработки событий через epoll.
+     * @brief Основной цикл обработки событий epoll.
+     *
+     * Обрабатывает клиентские подключения и обмен данными между клиентами и PostgreSQL до тех пор,
+     * пока не будет установлен флаг завершения (stop_flag).
+     * @throw std::runtime_error Если epoll_wait вернет ошибку, отличную от EINTR.
      */
     void EventLoop();
 
     /**
-     * @brief Проверяет, является ли дескриптор клиентским.
-     * @param fd Дескриптор для проверки.
-     * @return true, если клиентский.
+     * @brief Обновляет маску событий для указанного файлового дескриптора в epoll.
+     * @param fd Файловый дескриптор.
+     * @param events Новая маска событий (EPOLLIN, EPOLLOUT и т.д.).
      */
-    bool IsClientFD(int fd);
+    void UpdateEpollEvents(int fd, uint32_t events);
 
     /**
-     * @brief Возвращает клиентский дескриптор по дескриптору PostgreSQL.
-     * @param pgsql_fd Дескриптор PostgreSQL.
-     * @return Дескриптор клиента, либо -1.
-     */
-    int GetClientFD(int pgsql_fd);
-
-    /**
-     * @brief Добавляет флаг EPOLLOUT для дескриптора.
-     * @param fd Дескриптор.
-     */
-    void AddEpollOut(int fd);
-
-    /**
-     * @brief Удаляет флаг EPOLLOUT с дескриптора.
-     * @param fd Дескриптор.
-     */
-    void RemoveEpollOut(int fd);
-
-    /**
-     * @brief Принимает новые входящие подключения.
+     * @brief Принимает новые клиентские подключения.
+     *
+     * Создает неблокирующий сокет для клиента, добавляет его в epoll,
+     * открывает соединение с PostgreSQL и создает сессию.
+     * В случае ошибок выводит сообщение в stderr.
      */
     void AcceptNewConnections();
 
     /**
-     * @brief Закрывает сокет.
-     * @param fd Дескриптор, связанный с клиентом или PostgreSQL.
+     * @brief Закрывает сессию (клиент + PostgreSQL).
+     * @param session Умный указатель на объект Session.
+     *
+     * Удаляет оба дескриптора из epoll, очищает хэштейблы сессий и эндпоинтов, логирует закрытие соединения.
      */
-    void SafeCloseFD(int fd);
+    void CloseSession(std::shared_ptr<Session> session);
 
     /**
-     * @brief Закрывает соединение с клиентом и PostgreSQL.
-     * @param fd Дескриптор, связанный с клиентом или PostgreSQL.
-     */
-    void CloseConnection(int fd);
-
-    /**
-     * @brief Обрабатывает событие epoll.
-     * @param event Структура события.
+     * @brief Обрабатывает событие epoll для конкретного дескриптора.
+     * @param event Структура epoll_event, содержащая информацию о событии.
+     *
+     * Выполняет чтение/запись данных, проксирование между клиентом и PostgreSQL,
+     * и логирование сообщений от клиента.
      */
     void HandleEvent(epoll_event& event);
 
     /**
-     * @brief Проверяет, отключен ли SSL для клиента.
-     * @param fd Дескриптор клиента.
-     * @return true, если SSL отключен.
+     * @brief Проверяет корректность порта.
+     * @param port Порт.
+     * @return Корректный порт.
+     * @throw std::invalid_argument Если порт вне диапазона (1-65535).
      */
-    bool SSLDisabled(int fd) const;
+    int CheckPort(int port);
 
     /**
-     * @brief Проверяет, является ли запрос SSL-запросом.
-     * @param client_data Буфер с данными клиента.
-     * @return true, если SSL-запрос.
+     * @brief Проверяет корректность IP-адреса.
+     * @param host IP-адрес в строковом формате.
+     * @return Корректный IP-адрес.
+     * @throw std::invalid_argument Если адрес некорректный.
      */
-    bool IsSSLRequest(const std::vector<char>& client_data) const;
-
-    /**
-     * @brief Отклоняет SSL-запрос от клиента.
-     * @param event epoll-событие клиента.
-     */
-    void DisableSSL(epoll_event& event);
-
-    /**
-     * @brief Пытается отправить данные, если есть в буфере.
-     * @param fd Дескриптор для отправки.
-     */
-    void TrySend(int fd);
-
-    /**
-     * @brief Отправляет данные, добавляя их в буфер отправки.
-     * @param fd Дескриптор.
-     * @param data Данные для отправки.
-     */
-    void SendBuffer(int fd, const std::vector<char>& data);
-
-    /**
-     * @brief Принимает все доступные данные с сокета.
-     * @param fd Дескриптор.
-     * @param buffer Буфер, куда пишутся данные.
-     * @return Количество прочитанных байт.
-     */
-    ssize_t RecvAll(int fd, std::vector<char>& buffer);
+    std::string CheckHost(const std::string& host);
 
 private:
-    unsigned _port; ///< Порт для прослушивания.
+    int _listen_port; ///< Порт для прослушивания клиентских соединений.
+    std::string _db_host; ///< IP-адрес хоста PostgreSQL.
+    int _db_port; ///< Порт PostgreSQL.
+    Logger _logger; ///< Логгер для записи информации о соединениях и сообщениях.
 
-    Logger _logger; ///< Класс для логирования запросов и информации о соединениях.
+    UniqueFD _proxy_fd{}; ///< Файловый дескриптор серверного сокета (слушающего).
+    UniqueFD _epoll_fd{}; ///< Файловый дескриптор epoll.
 
-    UniqueFD _proxy_fd{}; ///< RAII-обертка над дескриптором сокета прокси-сервера.
-    UniqueFD _epoll_fd{}; ///< RAII-обертка над дескриптором epoll.
-
-    std::unordered_set<int> _ssl_disabled_clients_set; ///< Множество клиентов с отключенным SSL.
-    std::unordered_map<int, int> _client_psql_sockets_ht; ///< Соответствие клиент fd ↔ PostgreSQL fd.
-    std::unordered_map<int, Connection> _fd_connection_ht; ///< Соответствие pgsql fd ↔ информаиця о соединении.
-    std::unordered_map<int, std::vector<char>> _send_buffers_ht; ///< Соответствие fd ↔ Буфер отправки.
+    std::unordered_map<int, Endpoint> _fd_endpoint_ht; ///< Соотношение клиентский fd <-> структура Endpoint.
+    std::unordered_map<int, std::shared_ptr<Session>> _fd_session_ht; ///< Соотношение fd <-> сессия.
 };
 
 #endif // CPP_POSTGRESQL_TCP_PROXY_SERVER_SERVER_SERVER_H

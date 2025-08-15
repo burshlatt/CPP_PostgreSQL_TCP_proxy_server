@@ -1,52 +1,68 @@
-#include <iostream>
 #include <atomic>
 #include <csignal>
-#include <fcntl.h>
 #include <cstring>
-#include <unistd.h>
-#include <algorithm>
+#include <iostream>
+
+#include <fcntl.h>
+#include <arpa/inet.h>
 #include <sys/socket.h>
 
 #include "server.h"
 
-std::atomic<bool> stop_flag(false);
+static volatile sig_atomic_t stop_flag = 0;
 
-void signal_handler(int signal) {
-    if (signal == SIGINT) {
-        stop_flag = true;
+void signal_handler(int sig) {
+    if (sig == SIGINT) {
+        stop_flag = 1;
     }
 }
 
-Server::Server(char* port) :
-    _port(std::stoi(port)),
-    _logger("requests.log")
-{
-    std::signal(SIGINT, signal_handler);
+Server::Server(int listen_port, const std::string& db_host, int db_port, const std::string& log_file) :
+    _listen_port(CheckPort(listen_port)),
+    _db_host(CheckHost(db_host)),
+    _db_port(CheckPort(db_port)),
+    _logger(_db_host, _db_port, log_file)
+{}
 
-    SetupEpoll();
-    SetupServerSocket();
+int Server::CheckPort(int port) {
+    if (port > 0 && port <= 65535) {
+        return port;
+    }
+
+    throw std::invalid_argument("Invalid port: " + std::to_string(port));
 }
 
-Server::~Server() {
-    for (auto& [client_fd, pgsql_fd] : _client_psql_sockets_ht) {
-        close(pgsql_fd);
-        close(client_fd);
+std::string Server::CheckHost(const std::string& host) {
+    struct in_addr addr;
+
+    if (inet_pton(AF_INET, host.c_str(), &addr) == 1) {
+        return host;
     }
+
+    throw std::invalid_argument("Invalid host: " + host);
 }
 
 void Server::SetupEpoll() {
     _epoll_fd = UniqueFD(epoll_create1(0));
     
     if (!_epoll_fd.Valid()) {
-        throw std::runtime_error("SetupEpoll() error creating epoll instance: " + std::to_string(errno));
+        throw std::runtime_error("SetupEpoll(): " + std::string(strerror(errno)));
     }
+}
+
+void Server::UpdateEpollEvents(int fd, uint32_t events) {
+    epoll_event event;
+    event.data.fd = fd;
+    event.events = events;
+
+    epoll_ctl(_epoll_fd, EPOLL_CTL_MOD, fd, &event);
 }
 
 void Server::SetupServerSocket() {
     _proxy_fd = UniqueFD(socket(AF_INET, SOCK_STREAM, 0));
 
     if (!_proxy_fd.Valid()) {
-        throw std::runtime_error("SetupServerSocket() error creating socket: " + std::to_string(errno));
+        throw std::runtime_error("SetupServerSocket(): " + std::string(strerror(errno)));
     }
 
     int flags{fcntl(_proxy_fd, F_GETFL, 0)};
@@ -55,22 +71,22 @@ void Server::SetupServerSocket() {
     int opt{1};
 
     if (setsockopt(_proxy_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
-        throw std::runtime_error("SetupServerSocket() error setting socket options: " + std::to_string(errno));
+        throw std::runtime_error("SetupServerSocket(): " + std::string(strerror(errno)));
     }
 
-    struct sockaddr_in server_addr;
+    struct sockaddr_in server_addr = {};
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(_port);
+    server_addr.sin_port = htons(_listen_port);
 
     auto s_addr{reinterpret_cast<struct sockaddr*>(&server_addr)};
 
     if (bind(_proxy_fd, s_addr, sizeof(server_addr)) == -1) {
-        throw std::runtime_error("Socket binding error!");
+        throw std::runtime_error("SetupServerSocket(): " + std::string(strerror(errno)));
     }
 
     if (listen(_proxy_fd, SOMAXCONN) == -1) {
-        throw std::runtime_error("Socket listening Error!");
+        throw std::runtime_error("SetupServerSocket(): " + std::string(strerror(errno)));
     }
 
     epoll_event event;
@@ -78,33 +94,29 @@ void Server::SetupServerSocket() {
     event.data.fd = _proxy_fd;
 
     if (epoll_ctl(_epoll_fd, EPOLL_CTL_ADD, _proxy_fd, &event) == -1) {
-        throw std::runtime_error("SetupServerSocket() error adding socket to epoll: " + std::to_string(errno));
+        throw std::runtime_error("SetupServerSocket(): " + std::string(strerror(errno)));
     }
 }
 
-int Server::SetupPGSQLSocket() {
-    int pgsql_fd{socket(AF_INET, SOCK_STREAM, 0)};
+UniqueFD Server::SetupPGSQLSocket() {
+    UniqueFD pgsql_fd(socket(AF_INET, SOCK_STREAM, 0));
 
-    if (pgsql_fd == -1) {
-        throw std::runtime_error("SetupPGSQLSocket() error creating socket: " + std::to_string(errno));
+    if (!pgsql_fd.Valid()) {
+        throw std::runtime_error("SetupPGSQLSocket(): " + std::string(strerror(errno)));
     }
 
-    struct sockaddr_in pgsql_addr;
+    struct sockaddr_in pgsql_addr = {};
     pgsql_addr.sin_family = AF_INET;
-    pgsql_addr.sin_port = htons(5432);
+    pgsql_addr.sin_port = htons(_db_port);
 
-    if (inet_pton(AF_INET, "127.0.0.1", &pgsql_addr.sin_addr) <= 0) {
-        close(pgsql_fd);
-
-        throw std::runtime_error("SetupPGSQLSocket() error converting IP address: " + std::to_string(errno));
+    if (inet_pton(AF_INET, _db_host.c_str(), &pgsql_addr.sin_addr) <= 0) {
+        throw std::runtime_error("SetupPGSQLSocket(): " + std::string(strerror(errno)));
     }
 
     auto p_addr{reinterpret_cast<struct sockaddr*>(&pgsql_addr)};
 
     if (connect(pgsql_fd, p_addr, sizeof(pgsql_addr))) {
-        close(pgsql_fd);
-
-        throw std::runtime_error("SetupPGSQLSocket() error connecting to postgresql server: " + std::to_string(errno));
+        throw std::runtime_error("SetupPGSQLSocket(): " + std::string(strerror(errno)));
     }
 
     int flags{fcntl(pgsql_fd, F_GETFL, 0)};
@@ -115,34 +127,27 @@ int Server::SetupPGSQLSocket() {
     event.data.fd = pgsql_fd;
 
     if (epoll_ctl(_epoll_fd, EPOLL_CTL_ADD, pgsql_fd, &event) == -1) {
-        close(pgsql_fd);
-
-        throw std::runtime_error("SetupPGSQLSocket() error adding socket to epoll: " + std::to_string(errno));
+        throw std::runtime_error("SetupPGSQLSocket(): " + std::string(strerror(errno)));
     }
-
-    Connection& conn{_fd_connection_ht[pgsql_fd]};
-    conn.pgsql.fd = pgsql_fd;
-    conn.pgsql.ip = inet_ntoa(pgsql_addr.sin_addr);
-    conn.pgsql.port = pgsql_addr.sin_port;
 
     return pgsql_fd;
 }
 
 void Server::AcceptNewConnections() {
     while (true) {
-        struct sockaddr_in client_addr;
+        struct sockaddr_in client_addr = {};
         auto c_addr{reinterpret_cast<sockaddr*>(&client_addr)};
         socklen_t c_addr_len{sizeof(client_addr)};
 
-        int client_fd{accept(_proxy_fd, c_addr, &c_addr_len)};
+        UniqueFD client_fd(accept(_proxy_fd, c_addr, &c_addr_len));
 
-        if (client_fd == -1) {
+        if (!client_fd.Valid()) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
             } else if (errno == EINTR) {
                 continue;
             } else {
-                std::cerr << "accept() error: " << strerror(errno) << '\n';
+                std::cerr << "accept(): " << strerror(errno) << '\n';
 
                 break;
             }
@@ -156,258 +161,84 @@ void Server::AcceptNewConnections() {
         event.data.fd = client_fd;
 
         if (epoll_ctl(_epoll_fd, EPOLL_CTL_ADD, client_fd, &event) == -1) {
-            close(client_fd);
-
-            std::cerr << "epoll_ctl() error: " << strerror(errno) << '\n';
+            std::cerr << "epoll_ctl(): " << strerror(errno) << '\n';
 
             continue;
         }
 
         try {
-            int pgsql_fd{SetupPGSQLSocket()};
+            UniqueFD pgsql_fd{SetupPGSQLSocket()};
 
-            _client_psql_sockets_ht[client_fd] = pgsql_fd;
+            auto session{std::make_shared<Session>(std::move(pgsql_fd), std::move(client_fd),
+            [this](int fd, uint32_t events) {
+                UpdateEpollEvents(fd, events);
+            })};
 
-            Connection& conn{_fd_connection_ht[pgsql_fd]};
-            conn.client.fd = client_fd;
-            conn.client.ip = inet_ntoa(client_addr.sin_addr);
-            conn.client.port = client_addr.sin_port;
-            conn.conn_status = ConnectionStatus::K_OPEN;
+            _fd_session_ht[session->GetPGSQLFD()] = session;
+            _fd_session_ht[session->GetClientFD()] = session;
 
-            _logger.PrintInTerminal(conn);
+            Endpoint& client_ep{_fd_endpoint_ht[session->GetClientFD()]};
+            client_ep.ip = inet_ntoa(client_addr.sin_addr);
+            client_ep.port = ntohs(client_addr.sin_port);
+
+            _logger.PrintInTerminal(client_ep, ConnectionStatus::K_OPEN);
         } catch (const std::exception& e) {
-            close(client_fd);
-
             std::cerr << "ConnectToPGSQL() connection failed: " << e.what() << '\n';
         }
     }
 }
 
-bool Server::IsClientFD(int fd) {
-    return _client_psql_sockets_ht.find(fd) != _client_psql_sockets_ht.end();
-}
+void Server::CloseSession(std::shared_ptr<Session> session) {
+    int pgsql_fd{session->GetPGSQLFD()};
+    int client_fd{session->GetClientFD()};
 
-int Server::GetClientFD(int pgsql_fd) {
-    for (const auto& it : _client_psql_sockets_ht) {
-        if (it.second == pgsql_fd) {
-            return it.first;
-        }
-    }
+    epoll_ctl(_epoll_fd, EPOLL_CTL_DEL, pgsql_fd, nullptr);
+    epoll_ctl(_epoll_fd, EPOLL_CTL_DEL, client_fd, nullptr);
 
-    return -1;
-}
+    _fd_session_ht.erase(pgsql_fd);
+    _fd_session_ht.erase(client_fd);
 
-void Server::SafeCloseFD(int fd) {
-    if (fd >= 0) {
-        epoll_ctl(_epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
-        close(fd);
-    }
-}
+    _logger.PrintInTerminal(_fd_endpoint_ht[client_fd], ConnectionStatus::K_CLOSED);
 
-void Server::CloseConnection(int fd) {
-    int pgsql_fd{-1};
-    int client_fd{-1};
-
-    if (IsClientFD(fd)) {
-        client_fd = fd;
-        pgsql_fd = _client_psql_sockets_ht[client_fd];
-    } else {
-        pgsql_fd = fd;
-        client_fd = GetClientFD(pgsql_fd);
-
-        if (client_fd == -1) {
-            std::cerr << "CloseConnection() unknown client_fd: " << fd << '\n';
-
-            return;
-        }
-    }
-
-    SafeCloseFD(pgsql_fd);
-    SafeCloseFD(client_fd);
-
-    _client_psql_sockets_ht.erase(client_fd);
-
-    Connection& conn{_fd_connection_ht[pgsql_fd]};
-    conn.conn_status = ConnectionStatus::K_CLOSED;
-
-    _logger.PrintInTerminal(conn);
-}
-
-void Server::AddEpollOut(int fd) {
-    epoll_event event;
-    event.data.fd = fd;
-    event.events = EPOLLIN | EPOLLOUT | EPOLLET;
-
-    epoll_ctl(_epoll_fd, EPOLL_CTL_MOD, fd, &event);
-}
-
-void Server::RemoveEpollOut(int fd) {
-    epoll_event event;
-    event.data.fd = fd;
-    event.events = EPOLLIN | EPOLLET;
-
-    epoll_ctl(_epoll_fd, EPOLL_CTL_MOD, fd, &event);
-}
-
-ssize_t Server::RecvAll(int fd, std::vector<char>& buffer) {
-    constexpr size_t BUFFER_SIZE{4096};
-    ssize_t bytes_read{0};
-
-    while (true) {
-        char temp[BUFFER_SIZE];
-        ssize_t n{recv(fd, temp, sizeof(temp), 0)};
-
-        if (n > 0) {
-            buffer.insert(buffer.end(), temp, temp + n);
-
-            bytes_read += n;
-        } else if (n == 0) {
-            
-            CloseConnection(fd);
-        
-            return n;
-        } else {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                break;
-            } else if (errno == EINTR) {
-                continue;
-            }
-
-            std::cerr << "recv() error from client: " << strerror(errno) << '\n';
-
-            CloseConnection(fd);
-
-            return n;
-        }
-    }
-
-    return bytes_read;
-}
-
-void Server::SendBuffer(int fd, const std::vector<char>& data) {
-    auto& buffer{_send_buffers_ht[fd]};
-    buffer.insert(buffer.end(), data.begin(), data.end());
-
-    TrySend(fd);
-}
-
-void Server::TrySend(int fd) {
-    size_t bytes_sent{0};
-    auto& buffer{_send_buffers_ht[fd]};
-
-    while (bytes_sent < buffer.size()) {
-        ssize_t n{send(fd, buffer.data() + bytes_sent, buffer.size() - bytes_sent, 0)};
-        
-        if (n > 0) {
-            bytes_sent += n;
-        } else if (n == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                AddEpollOut(fd);
-
-                buffer.erase(buffer.begin(), buffer.begin() + bytes_sent);
-
-                return;
-            } else if (errno == EINTR) {
-                continue;
-            }
-
-            std::cerr << "send() error to PostgreSQL: " << strerror(errno) << '\n';
-
-            CloseConnection(fd);
-
-            return;
-        }
-    }
-
-    RemoveEpollOut(fd);
-
-    _send_buffers_ht.erase(fd);
-}
-
-bool Server::IsSSLRequest(const std::vector<char>& client_data) const {
-    if (client_data.size() != 8) {
-        return false;
-    }
-    
-    uint32_t received_msg{0};
-
-    std::memcpy(&received_msg, client_data.data() + 4, sizeof(int));
-
-    received_msg = ntohl(received_msg);
-
-    const uint32_t ssl_request_code{80877103};
-
-    if (received_msg == ssl_request_code) {
-        return true;
-    }
-
-    return false;
-}
-
-void Server::DisableSSL(epoll_event& event) {
-    int client_fd{event.data.fd};
-    const char ssl_deny_msg{'N'};
-
-    if (send(client_fd, &ssl_deny_msg, 1, 0) < 0) {
-        std::cerr << "DisableSSL() error: " << strerror(errno) << '\n';
-    } else {
-        _ssl_disabled_clients_set.insert(client_fd);
-    }
-}
-
-bool Server::SSLDisabled(int fd) const {
-    return _ssl_disabled_clients_set.find(fd) != _ssl_disabled_clients_set.end();
+    _fd_endpoint_ht.erase(client_fd);
 }
 
 void Server::HandleEvent(epoll_event& event) {
-    int peer_fd{-1};
     int fd{event.data.fd};
-    bool is_client{IsClientFD(fd)};
 
-    if (is_client) {
-        peer_fd = _client_psql_sockets_ht[fd];
-    } else {
-        peer_fd = GetClientFD(fd);
-    }
+    auto it{_fd_session_ht.find(fd)};
 
-    if (peer_fd == -1) {
-        std::cerr << "HandleEvent() unknown fd in epoll: " << fd << '\n';
-
+    if (it == _fd_session_ht.end()) {
         return;
     }
+
+    auto& session{it->second};
+
+    int peer_fd{session->GetPeerFD(fd)};
 
     if (event.events & EPOLLOUT) {
-        TrySend(fd);
-
-        return;
-    }
-
-    std::vector<char> data;
-
-    if (RecvAll(fd, data) <= 0) {
-        return;
-    }
-
-    if (data.empty()) {
-        return;
-    }
-
-    if (is_client) {
-        if (!SSLDisabled(fd)) {
-            if (IsSSLRequest(data)) {
-                DisableSSL(event);
-
-                return;
-            }
+        if (!session->TrySend(fd)) {
+            CloseSession(session);
         }
 
-        auto& connection{_fd_connection_ht[peer_fd]};
-        std::string_view message(data.data(), data.size());
-
-        _logger.SaveLogs(connection.client, message);
+        return;
     }
 
-    SendBuffer(peer_fd, data);
+    if (!session->RecvAll(fd)) {
+        CloseSession(session);
+
+        return;
+    }
+
+    if (session->IsClientFD(fd)) {
+        auto message{session->GetDataToPGSQL()};
+
+        _logger.SaveLogs(_fd_endpoint_ht[fd], message);
+    }
+
+    if (!session->TrySend(peer_fd)) {
+        CloseSession(session);
+    }
 }
 
 void Server::EventLoop() {
@@ -424,7 +255,7 @@ void Server::EventLoop() {
                 continue;
             }
 
-            throw std::runtime_error("epoll_wait() failed: " + std::string(strerror(errno)));
+            throw std::runtime_error("epoll_wait(): " + std::string(strerror(errno)));
         }
 
         for (int i{}; i < num_events; ++i) {
@@ -439,6 +270,10 @@ void Server::EventLoop() {
     }
 }
 
-void Server::Start() {
+void Server::Run() {
+    std::signal(SIGINT, signal_handler);
+
+    SetupEpoll();
+    SetupServerSocket();
     EventLoop();
 }

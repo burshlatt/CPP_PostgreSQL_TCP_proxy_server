@@ -6,11 +6,14 @@
 
 #include "logger.h"
 
-Logger::Logger(const std::string& path) {
+Logger::Logger(const std::string& db_host, int db_port, const std::string& path) :
+    _pgsql_host(db_host),
+    _pgsql_port(std::to_string(db_port))
+{
     _log_file.open(path, std::ios::app);
 
     if (!_log_file.is_open()) {
-        throw std::runtime_error("Server::Server() error opening file: " + std::to_string(errno));
+        throw std::invalid_argument("Invalid file: " + path);
     }
 }
 
@@ -20,26 +23,13 @@ bool Logger::IsSQLRequest(std::string_view request) const {
 
 std::string_view Logger::GetSQLRequest(std::string_view request) const {
     if (request.back() == '\0') {
-        request.remove_suffix(1); // Убираем нулевой терминатор
+        request.remove_suffix(1);
     }
 
-    return request.substr(5); // Убираем первые 5 байт (1 - Тип сообщения, 4 - размер сообщения)
+    return request.substr(5);
 }
 
-void Logger::SaveLogs(const Endpoint& ep, std::string_view request) {
-    if (!IsSQLRequest(request)) {
-        return;
-    }
-
-    std::string current_time{"[" + GetCurrentTime() + "] "};
-    std::string client_info{"[client: " + ep.ip + ":" + std::to_string(ep.port) + "] "};
-    std::string sql_req(GetSQLRequest(request));
-    std::string result_str{current_time + client_info + sql_req};
-
-    _log_file << result_str << '\n';
-}
-
-std::string Logger::GetCurrentTime() {
+std::string Logger::GetCurrentTimestamp() {
     auto now{std::chrono::system_clock::now()};
     std::time_t now_time{std::chrono::system_clock::to_time_t(now)};
     std::tm* local_time{std::localtime(&now_time)};
@@ -50,12 +40,24 @@ std::string Logger::GetCurrentTime() {
     return oss.str();
 }
 
-void Logger::PrintInTerminal(const Connection& conn) {
-    std::string current_time{"[" + GetCurrentTime() + "] "};
-    std::string connection_status{conn.conn_status == ConnectionStatus::K_OPEN ? "Connection open " : "Connection closed "};
-    std::string fd_info{"(client_fd=" + std::to_string(conn.client.fd) + ", server_fd=" + std::to_string(conn.pgsql.fd) + "): "};
-    std::string ip_info{"client " + conn.client.ip + ":" + std::to_string(conn.client.port) + " -> pgsql server " + conn.pgsql.ip + ":" + std::to_string(conn.pgsql.port)};
-    std::string result_str{current_time + connection_status + fd_info + ip_info};
+void Logger::SaveLogs(const Endpoint& clinet_ep, std::string_view request) {
+    if (!IsSQLRequest(request)) {
+        return;
+    }
+
+    std::string current_time{"[" + GetCurrentTimestamp() + "] "};
+    std::string client_info{"[client: " + clinet_ep.ip + ":" + std::to_string(clinet_ep.port) + "] "};
+    std::string sql_req(GetSQLRequest(request));
+    std::string result_str{current_time + client_info + sql_req};
+
+    _log_file << result_str << '\n';
+}
+
+void Logger::PrintInTerminal(const Endpoint& clinet_ep, ConnectionStatus status) {
+    std::string current_time{"[" + GetCurrentTimestamp() + "] "};
+    std::string connection_status{status == ConnectionStatus::K_OPEN ? "Connection open: " : "Connection closed: "};
+    std::string ip_info{"client " + clinet_ep.ip + ":" + std::to_string(clinet_ep.port) + " -> pgsql server " + _pgsql_host + ":" + _pgsql_port};
+    std::string result_str{current_time + connection_status + ip_info};
 
     std::cout << result_str << std::endl;
 }
